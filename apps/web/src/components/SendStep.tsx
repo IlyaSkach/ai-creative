@@ -46,9 +46,14 @@ export function SendStep({ text, imageBase64, onBack, onEdit, onSend }: SendStep
         setChatIdResult("Напишите боту /start в Telegram, затем нажмите снова «Узнать мой chat_id».");
         return;
       }
+      // Берём последний chat_id из обновлений (тот, кто последним писал боту /start)
       const last = chats[chats.length - 1];
       setTo(String(last.chatId));
-      setChatIdResult(`Ваш chat_id: ${last.chatId}. Подставлен в поле «Кому».`);
+      setChatIdResult(
+        `Последний chat_id из обновлений бота: ${last.chatId}. ` +
+        `Подставлен в поле «Кому». ` +
+        `Убедитесь, что это ваш chat_id (если недавно писали боту /start — это вы).`
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : "Ошибка");
     } finally {
@@ -109,11 +114,15 @@ export function SendStep({ text, imageBase64, onBack, onEdit, onSend }: SendStep
         <p style={{ color: "var(--muted)", fontSize: "0.85rem", margin: "0 0 0.5rem" }}>
           Напишите боту в Telegram команду <strong>/start</strong>, затем здесь, на сайте, нажмите кнопку <strong>«Узнать мой chat_id»</strong> — chat_id подставится в поле «Кому».
         </p>
-        <p style={{ color: "var(--muted)", fontSize: "0.8rem", margin: "0 0 1rem" }}>
+        <p style={{ color: "var(--muted)", fontSize: "0.8rem", margin: "0 0 0.5rem" }}>
           Бот:{" "}
           <a href="https://t.me/DS_tg_creativeBot" target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>
             @DS_tg_creativeBot
           </a>
+        </p>
+        <p style={{ color: "var(--muted)", fontSize: "0.8rem", margin: "0 0 1rem" }}>
+          <strong>Важно:</strong> показывается последний chat_id из обновлений бота (тот, кто последним писал /start). 
+          Убедитесь, что это ваш chat_id. Если между вашим /start и нажатием кнопки кто-то ещё писал боту — будет показан его chat_id.
         </p>
         {sent ? (
           <p style={{ color: "var(--accent)" }}>Сообщение отправлено.</p>
