@@ -1,11 +1,6 @@
 import { useState } from "react";
 import type { ChannelInfo } from "./api";
-import {
-  analyzeChannel,
-  generateCreative,
-  editCreativeWithAi,
-  sendToTelegram,
-} from "./api";
+import { editCreativeWithAi, sendToTelegram } from "./api";
 import { ChannelStep } from "./components/ChannelStep";
 import { CreativeStep } from "./components/CreativeStep";
 import { SendStep } from "./components/SendStep";
