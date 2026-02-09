@@ -119,7 +119,8 @@ async function main() {
       const sessionDir = path.resolve(__dirname, "../../../session");
       const sessionFile = path.join(sessionDir, "session.txt");
       fs.mkdirSync(sessionDir, { recursive: true });
-      fs.writeFileSync(sessionFile, sessionString, "utf8");
+      // В типах gramjs save() может быть void, но по факту всегда возвращает строку
+      fs.writeFileSync(sessionFile, String(sessionString ?? ""), "utf8");
 
       console.log("\n✅ Вход выполнен.\n");
       console.log("Сессия сохранена в:", sessionFile);

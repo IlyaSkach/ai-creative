@@ -94,7 +94,8 @@ export async function sendPhoto(chatId: string, caption: string, photoBase64: st
   try {
     const res = await fetch(url, {
       method: "POST",
-      body,
+      // node-fetch типами не знает про Buffer, но на практике принимает его
+      body: body as any,
       headers: {
         "Content-Type": `multipart/form-data; boundary=${boundary}`,
         "Content-Length": String(body.length),

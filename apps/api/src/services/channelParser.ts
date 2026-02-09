@@ -139,7 +139,8 @@ async function fetchPostsIfAvailable(username: string): Promise<ChannelPost[]> {
           limit: 100,
           maxId: 0,
           minId: 0,
-          hash: 0,
+          // Тип ожидает BigInteger, но для нас достаточно нулевого hash
+          hash: 0 as any,
         })
       );
       const raw = res as { messages?: unknown[] };
