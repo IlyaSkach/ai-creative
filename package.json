@@ -1,0 +1,20 @@
+{
+  "name": "ai-creative",
+  "private": true,
+  "description": "Генерация рекламных креативов по Telegram-каналу с ИИ",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:api\" \"npm run dev:web\"",
+    "dev:api": "npm run dev --workspace=apps/api",
+    "dev:web": "npm run dev --workspace=apps/web",
+    "build": "npm run build --workspace=apps/api && npm run build --workspace=apps/web",
+    "start": "npm run start --workspace=apps/api",
+    "login": "npm run login --workspace=apps/api"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  },
+  "workspaces": [
+    "apps/api",
+    "apps/web"
+  ]
+}
