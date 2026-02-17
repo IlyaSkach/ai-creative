@@ -1,21 +1,37 @@
 import { Router } from "express";
-import { generateCreative, editCreativeWithAi } from "../services/deepseek.js";
+import { analyzeChannelTopics, generateCreative, editCreativeWithAi } from "../services/deepseek.js";
 import { generateImage } from "../services/bothub.js";
 import type { ChannelInfo } from "../services/deepseek.js";
 
 export const creativeRouter = Router();
 
+creativeRouter.post("/themes", async (req, res) => {
+  try {
+    const { channelInfo } = req.body as { channelInfo: ChannelInfo };
+    if (!channelInfo?.title || !channelInfo?.channelLink) {
+      res.status(400).json({ error: "Нужны данные канала (channelInfo). Сначала вызовите /api/channel/analyze" });
+      return;
+    }
+    const topics = await analyzeChannelTopics(channelInfo);
+    res.json(topics);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "Ошибка анализа тем";
+    res.status(500).json({ error: message });
+  }
+});
+
 creativeRouter.post("/generate", async (req, res) => {
   try {
-    const { channelInfo, withImage } = req.body as {
+    const { channelInfo, withImage, selectedTopic } = req.body as {
       channelInfo: ChannelInfo;
       withImage?: boolean;
+      selectedTopic?: string;
     };
     if (!channelInfo?.title || !channelInfo?.channelLink) {
       res.status(400).json({ error: "Нужны данные канала (channelInfo). Сначала вызовите /api/channel/analyze" });
       return;
     }
-    const { text, imagePrompt } = await generateCreative(channelInfo, Boolean(withImage));
+    const { text, imagePrompt } = await generateCreative(channelInfo, Boolean(withImage), selectedTopic);
     let imageBase64: string | null = null;
     let imageError: string | null = null;
     if (withImage && imagePrompt) {

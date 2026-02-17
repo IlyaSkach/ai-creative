@@ -181,10 +181,11 @@ async function fetchPostsIfAvailable(username: string): Promise<ChannelPost[]> {
             // skip
           }
         }
-        if (text || photoBase64) {
+        const hasAnyMedia = Boolean(msg.media);
+        if (text || photoBase64 || hasAnyMedia) {
           posts.push({
             date: date.toISOString(),
-            text: text || "(медиа)",
+            text: text || "(пост без текста)",
             photoBase64,
             mediaType,
             views: views || undefined,

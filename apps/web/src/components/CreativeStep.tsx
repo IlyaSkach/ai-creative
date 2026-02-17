@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ChannelInfo } from "../api";
-import { generateCreative } from "../api";
+import { analyzeChannelTopics, generateCreative } from "../api";
 
 interface CreativeStepProps {
   channelInfo: ChannelInfo;
@@ -8,6 +8,7 @@ interface CreativeStepProps {
 }
 
 type ImageMode = "none" | "generated" | "from_post";
+const ALL_TOPICS = "__all_topics__";
 
 function engagementScore(p: { views?: number; reactionsCount?: number }): number {
   return (p.views ?? 0) + (p.reactionsCount ?? 0) * 2;
@@ -30,9 +31,47 @@ export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
   const [imageError, setImageError] = useState<string | null>(null);
   const [imageFromPost, setImageFromPost] = useState(false);
   const [imageMediaType, setImageMediaType] = useState("image/png");
+  const [topicsLoading, setTopicsLoading] = useState(false);
+  const [topicsError, setTopicsError] = useState("");
+  const [topicSummary, setTopicSummary] = useState("");
+  const [topics, setTopics] = useState<string[]>([]);
+  const [selectedTopic, setSelectedTopic] = useState("");
 
   const hasPostMedia = channelInfo.posts.some((p) => p.photoBase64);
   const postMediaCount = channelInfo.posts.filter((p) => p.photoBase64).length;
+
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      setTopicsLoading(true);
+      setTopicsError("");
+      try {
+        const result = await analyzeChannelTopics(channelInfo);
+        if (cancelled) return;
+        const nextTopics = (result.topics || []).filter((t) => t.trim().length > 0);
+        setTopicSummary(result.summary || "");
+        setTopics(nextTopics);
+        if (nextTopics.length > 1) {
+          setSelectedTopic(ALL_TOPICS);
+        } else if (nextTopics.length > 0) {
+          setSelectedTopic(nextTopics[0]);
+        } else {
+          setSelectedTopic("");
+        }
+      } catch (e) {
+        if (cancelled) return;
+        setTopicsError(e instanceof Error ? e.message : "Не удалось проанализировать темы канала");
+        setTopics(["Общая тема канала"]);
+        setSelectedTopic("Общая тема канала");
+      } finally {
+        if (!cancelled) setTopicsLoading(false);
+      }
+    };
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [channelInfo]);
 
   const handleGenerate = async () => {
     setError("");
@@ -40,7 +79,8 @@ export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
     setLoading(true);
     try {
       const withImage = imageMode === "generated";
-      const result = await generateCreative(channelInfo, withImage);
+      const topicForPrompt = selectedTopic === ALL_TOPICS ? undefined : (selectedTopic || undefined);
+      const result = await generateCreative(channelInfo, withImage, topicForPrompt);
       setText(result.text);
       if (imageMode === "generated") {
         setImageBase64(result.imageBase64);
@@ -103,40 +143,87 @@ export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
 
       <section className="card">
         <h2>Креатив</h2>
-        <div className="flex mb1" style={{ flexDirection: "column", gap: "0.5rem" }}>
-          <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", cursor: "pointer" }}>
-            <input
-              type="radio"
-              name="format"
-              checked={imageMode === "generated"}
-              onChange={() => setImageMode("generated")}
-            />
-            С картинкой (ИИ сгенерирует)
-          </label>
-          <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", cursor: "pointer" }}>
-            <input
-              type="radio"
-              name="format"
-              checked={imageMode === "from_post"}
-              onChange={() => setImageMode("from_post")}
-              disabled={!hasPostMedia}
-            />
-            С картинкой/гиф с поста
-            {!hasPostMedia && channelInfo.posts.length > 0 && " (в постах нет фото/гиф)"}
-            {!hasPostMedia && channelInfo.posts.length === 0 && " (загрузите посты — сессия Telegram)"}
-          </label>
-          <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", cursor: "pointer" }}>
-            <input
-              type="radio"
-              name="format"
-              checked={imageMode === "none"}
-              onChange={() => setImageMode("none")}
-            />
-            Только текст
-          </label>
+        <div style={{ display: "grid", gap: "0.9rem" }}>
+          <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "0.85rem" }}>
+            <p className="label" style={{ marginBottom: "0.45rem" }}>Темы канала (анализ ИИ)</p>
+            {topicsLoading ? (
+              <p style={{ color: "var(--muted)", margin: 0 }}>Анализирую темы постов…</p>
+            ) : (
+              <>
+                {topicsError && <p className="error">{topicsError}</p>}
+                {topicSummary && (
+                  <p style={{ color: "var(--muted)", marginTop: 0, marginBottom: "0.75rem" }}>{topicSummary}</p>
+                )}
+                {topics.length > 1 && (
+                  <label style={{ display: "flex", alignItems: "flex-start", gap: "0.55rem", cursor: "pointer", marginBottom: "0.5rem" }}>
+                    <input
+                      type="radio"
+                      name="topic"
+                      checked={selectedTopic === ALL_TOPICS}
+                      onChange={() => setSelectedTopic(ALL_TOPICS)}
+                    />
+                    <span>Сделать креатив по всем затронутым темам</span>
+                  </label>
+                )}
+                {topics.length > 0 && (
+                  <div style={{ display: "grid", gap: "0.45rem" }}>
+                    {topics.map((topic) => (
+                      <label key={topic} style={{ display: "flex", alignItems: "flex-start", gap: "0.55rem", cursor: "pointer" }}>
+                        <input
+                          type="radio"
+                          name="topic"
+                          checked={selectedTopic === topic}
+                          onChange={() => setSelectedTopic(topic)}
+                        />
+                        <span>{topic}</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
+          <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "0.85rem" }}>
+            <p className="label" style={{ marginBottom: "0.45rem" }}>Формат креатива</p>
+            <div style={{ display: "grid", gap: "0.5rem" }}>
+              <label style={{ display: "flex", alignItems: "flex-start", gap: "0.55rem", cursor: "pointer" }}>
+                <input
+                  type="radio"
+                  name="format"
+                  checked={imageMode === "generated"}
+                  onChange={() => setImageMode("generated")}
+                />
+                <span>С картинкой (ИИ сгенерирует)</span>
+              </label>
+              <label style={{ display: "flex", alignItems: "flex-start", gap: "0.55rem", cursor: "pointer" }}>
+                <input
+                  type="radio"
+                  name="format"
+                  checked={imageMode === "from_post"}
+                  onChange={() => setImageMode("from_post")}
+                  disabled={!hasPostMedia}
+                />
+                <span>
+                  С картинкой/гиф с поста
+                  {!hasPostMedia && channelInfo.posts.length > 0 && " (в постах нет фото/гиф)"}
+                  {!hasPostMedia && channelInfo.posts.length === 0 && " (загрузите посты — сессия Telegram)"}
+                </span>
+              </label>
+              <label style={{ display: "flex", alignItems: "flex-start", gap: "0.55rem", cursor: "pointer" }}>
+                <input
+                  type="radio"
+                  name="format"
+                  checked={imageMode === "none"}
+                  onChange={() => setImageMode("none")}
+                />
+                <span>Только текст</span>
+              </label>
+            </div>
+          </div>
         </div>
         <div className="flex">
-          <button onClick={handleGenerate} disabled={loading}>
+          <button onClick={handleGenerate} disabled={loading || topicsLoading}>
             {loading ? "Генерирую…" : "Сгенерировать креатив"}
           </button>
         </div>

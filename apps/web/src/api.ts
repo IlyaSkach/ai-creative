@@ -8,6 +8,11 @@ export interface ChannelInfo {
   posts: Array<{ date: string; text: string; photoBase64?: string; mediaType?: string; views?: number; reactionsCount?: number }>;
 }
 
+export interface ChannelTopics {
+  summary: string;
+  topics: string[];
+}
+
 export async function analyzeChannel(link: string): Promise<ChannelInfo> {
   const res = await fetch(`${API}/channel/analyze`, {
     method: "POST",
@@ -21,16 +26,28 @@ export async function analyzeChannel(link: string): Promise<ChannelInfo> {
 
 export async function generateCreative(
   channelInfo: ChannelInfo,
-  withImage: boolean
+  withImage: boolean,
+  selectedTopic?: string
 ): Promise<{ text: string; imageBase64: string | null; imagePrompt: string | null; imageError?: string | null }> {
   const res = await fetch(`${API}/creative/generate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ channelInfo, withImage }),
+    body: JSON.stringify({ channelInfo, withImage, selectedTopic }),
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || "Ошибка генерации");
   return data;
+}
+
+export async function analyzeChannelTopics(channelInfo: ChannelInfo): Promise<ChannelTopics> {
+  const res = await fetch(`${API}/creative/themes`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ channelInfo }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Ошибка анализа тем");
+  return data as ChannelTopics;
 }
 
 export async function editCreativeWithAi(

@@ -1,12 +1,21 @@
 import path from "path";
+import fs from "fs";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// Загружаем .env: сначала из текущей папки (при npm run dev из корня — это ai-creative), затем из путей относительно api
-dotenv.config({ path: path.resolve(process.cwd(), ".env") });
-dotenv.config({ path: path.resolve(__dirname, "../../../.env") });
-dotenv.config({ path: path.resolve(__dirname, "../.env") });
+// Загружаем .env из нескольких мест, т.к. в dev/prod может отличаться cwd и __dirname.
+const envCandidates = [
+  path.resolve(process.cwd(), ".env"),
+  path.resolve(process.cwd(), "../.env"),
+  path.resolve(process.cwd(), "../../.env"),
+  path.resolve(__dirname, "../../../.env"),
+  path.resolve(__dirname, "../../.env"),
+  path.resolve(__dirname, "../.env"),
+];
+for (const envPath of envCandidates) {
+  if (fs.existsSync(envPath)) dotenv.config({ path: envPath });
+}
 
 import express from "express";
 import cors from "cors";
