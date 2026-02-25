@@ -13,6 +13,7 @@ export interface ChannelInfo {
 export interface ChannelTopics {
   summary: string;
   topics: string[];
+  bestThemesInsight?: string;
 }
 
 async function parseApiResponse<T>(res: Response, fallbackError: string): Promise<T> {
@@ -48,12 +49,13 @@ export async function analyzeChannel(link: string): Promise<ChannelInfo> {
 export async function generateCreative(
   channelInfo: ChannelInfo,
   withImage: boolean,
-  selectedTopic?: string
+  selectedTopic?: string,
+  forcedSourcePostIndex?: number
 ): Promise<{ text: string; imageBase64: string | null; imagePrompt: string | null; imageError?: string | null; sourcePostIndex?: number | null }> {
   const res = await fetch(`${API}/creative/generate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ channelInfo, withImage, selectedTopic }),
+    body: JSON.stringify({ channelInfo, withImage, selectedTopic, forcedSourcePostIndex }),
   });
   return parseApiResponse<{ text: string; imageBase64: string | null; imagePrompt: string | null; imageError?: string | null; sourcePostIndex?: number | null }>(
     res,

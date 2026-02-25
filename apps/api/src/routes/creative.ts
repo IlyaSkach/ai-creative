@@ -22,16 +22,22 @@ creativeRouter.post("/themes", async (req, res) => {
 
 creativeRouter.post("/generate", async (req, res) => {
   try {
-    const { channelInfo, withImage, selectedTopic } = req.body as {
+    const { channelInfo, withImage, selectedTopic, forcedSourcePostIndex } = req.body as {
       channelInfo: ChannelInfo;
       withImage?: boolean;
       selectedTopic?: string;
+      forcedSourcePostIndex?: number;
     };
     if (!channelInfo?.title || !channelInfo?.channelLink) {
       res.status(400).json({ error: "Нужны данные канала (channelInfo). Сначала вызовите /api/channel/analyze" });
       return;
     }
-    const { text, imagePrompt, sourcePostIndex } = await generateCreative(channelInfo, Boolean(withImage), selectedTopic);
+    const { text, imagePrompt, sourcePostIndex } = await generateCreative(
+      channelInfo,
+      Boolean(withImage),
+      selectedTopic,
+      typeof forcedSourcePostIndex === "number" ? forcedSourcePostIndex : undefined
+    );
     let imageBase64: string | null = null;
     let imageError: string | null = null;
     if (withImage && imagePrompt) {

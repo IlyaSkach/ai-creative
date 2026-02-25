@@ -40,6 +40,7 @@ export interface ChannelInfo {
 export interface TopicsAnalysis {
   summary: string;
   topics: string[];
+  bestThemesInsight: string;
 }
 
 /** Охват поста: просмотры + реакции (реакции учитываем с весом). */
@@ -107,6 +108,7 @@ export async function analyzeChannelTopics(channelInfo: ChannelInfo): Promise<To
     return {
       summary: "По постам не удалось определить темы. Можно писать креатив по описанию канала.",
       topics: ["Общая тема канала"],
+      bestThemesInsight: "Недостаточно данных по постам для оценки наиболее эффективных тем.",
     };
   }
 
@@ -122,12 +124,14 @@ ${posts.map((p) => `- ${p}`).join("\n")}
 Определи основные направления канала и верни СТРОГО JSON:
 {
   "summary": "1-2 предложения с общей картиной канала",
-  "topics": ["Тема 1", "Тема 2", "Тема 3"]
+  "topics": ["Тема 1", "Тема 2", "Тема 3"],
+  "best_themes_insight": "Коротко: какие темы заходят лучше всего (по вовлеченности) и почему"
 }
 
 Требования:
 - topics: от 1 до 6 пунктов
 - темы короткие и конкретные
+- best_themes_insight: 1-2 коротких предложения, с упоминанием самых сильных тем
 - без markdown, только JSON`);
 
   const res = await fetch(`${DEEPSEEK_BASE}/v1/chat/completions`, {
@@ -154,18 +158,20 @@ ${posts.map((p) => `- ${p}`).join("\n")}
   const content = extractModelText(data);
   const cleaned = cleanJsonString(content);
   try {
-    const parsed = JSON.parse(cleaned) as { summary?: string; topics?: unknown };
+    const parsed = JSON.parse(cleaned) as { summary?: string; topics?: unknown; best_themes_insight?: string };
     const topics = Array.isArray(parsed.topics)
       ? parsed.topics.map((x) => String(x).trim()).filter(Boolean).slice(0, 6)
       : [];
     return {
       summary: (parsed.summary || "Основные направления определены по постам.").trim(),
       topics: topics.length > 0 ? topics : ["Общая тема канала"],
+      bestThemesInsight: (parsed.best_themes_insight || "Наилучшие темы определяются по постам с максимальными просмотрами и реакциями.").trim(),
     };
   } catch {
     return {
       summary: "Не удалось точно распарсить темы. Используйте общий креатив по каналу.",
       topics: ["Общая тема канала"],
+      bestThemesInsight: "Не удалось автоматически определить наиболее сильные темы. Проверьте посты с самым высоким охватом.",
     };
   }
 }
@@ -173,7 +179,8 @@ ${posts.map((p) => `- ${p}`).join("\n")}
 export async function generateCreative(
   channelInfo: ChannelInfo,
   withImage: boolean,
-  selectedTopic?: string
+  selectedTopic?: string,
+  forcedSourcePostIndex?: number
 ): Promise<{ text: string; imagePrompt: string | null; sourcePostIndex: number | null }> {
   const { base: DEEPSEEK_BASE, apiKey: API_KEY } = getConfig();
   if (!API_KEY) throw new Error("DEEPSEEK_API_KEY не задан");
@@ -187,10 +194,19 @@ export async function generateCreative(
 Добавь уместные эмодзи в текст (обычно 2–6 штук на весь креатив, без перегруза).
 Если выбрана конкретная тема — креатив должен фокусироваться именно на ней.
 Без markdown.`);
+  const focusedPost =
+    forcedSourcePostIndex && forcedSourcePostIndex >= 1 && forcedSourcePostIndex <= channelInfo.posts.length
+      ? channelInfo.posts[forcedSourcePostIndex - 1]
+      : null;
+  const focusedPostHint = focusedPost
+    ? `\nФокусный пост для креатива: #${forcedSourcePostIndex} (${trimForModel(focusedPost.text || "(без текста)", 220)}). Используй его как главную основу.\n`
+    : "";
+
   const user = sanitizeForModel(`${context}
 
 Посты с индексами (используй их для выбора релевантного поста по теме):
 ${indexedPostsContext || "Нет постов"}
+${focusedPostHint}
 
 Сгенерируй креатив.${selectedTopic ? ` Фокус-тема: ${selectedTopic}.` : ""}
 
@@ -205,6 +221,7 @@ ${indexedPostsContext || "Нет постов"}
 - это номер поста из списка выше (1..N) или null
 - если есть выбранная тема, укажи номер поста, который лучше всего соответствует теме
 - при равенстве выбирай пост с media:yes
+- если задан фокусный пост — укажи именно его индекс
 - если релевантного поста нет, укажи null
 
 ${withImage ? "Нужна картинка — заполни image_prompt на английском." : "Картинка не нужна — в image_prompt укажи null."}`);

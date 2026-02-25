@@ -136,7 +136,7 @@ export async function parseChannelFromTme(linkOrUsername: string): Promise<Chann
 
 const MAX_POSTS_WITH_PHOTOS = 5;
 
-const LAST_POSTS_LIMIT = 15;
+const LAST_POSTS_LIMIT = 30;
 
 function getReactionsCount(msg: { reactions?: { results?: Array<{ count?: number }> } }): number {
   const results = msg.reactions?.results;

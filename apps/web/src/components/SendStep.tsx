@@ -1,20 +1,32 @@
 import { useState, useEffect } from "react";
 import { fetchTelegramChatIds } from "../api";
+import type { DraftCreative } from "./CreativeStep";
 
 interface SendStepProps {
-  text: string;
-  imageBase64: string | null;
-  imageMediaType?: string | null;
+  creatives: DraftCreative[];
+  activeCreativeIndex: number;
+  onSelectCreative: (index: number) => void;
   onBack: () => void;
-  onEdit: (instruction: string) => Promise<string>;
+  onEdit: (instruction: string, currentText: string) => Promise<string>;
+  onReroll: () => Promise<void>;
   onSend: (to: string, text: string, imageBase64?: string | null, imageMediaType?: string | null) => Promise<void>;
 }
 
-export function SendStep({ text, imageBase64, imageMediaType, onBack, onEdit, onSend }: SendStepProps) {
-  const [editedText, setEditedText] = useState(text);
-  useEffect(() => setEditedText(text), [text]);
+export function SendStep({
+  creatives,
+  activeCreativeIndex,
+  onSelectCreative,
+  onBack,
+  onEdit,
+  onReroll,
+  onSend,
+}: SendStepProps) {
+  const current = creatives[activeCreativeIndex];
+  const [editedText, setEditedText] = useState(current?.text || "");
+  useEffect(() => setEditedText(current?.text || ""), [current?.text, activeCreativeIndex]);
   const [aiInstruction, setAiInstruction] = useState("");
   const [editLoading, setEditLoading] = useState(false);
+  const [rerollLoading, setRerollLoading] = useState(false);
   const [to, setTo] = useState("");
   const [sendLoading, setSendLoading] = useState(false);
   const [error, setError] = useState("");
@@ -27,7 +39,7 @@ export function SendStep({ text, imageBase64, imageMediaType, onBack, onEdit, on
     setError("");
     setEditLoading(true);
     try {
-      const newText = await onEdit(aiInstruction.trim());
+      const newText = await onEdit(aiInstruction.trim(), editedText);
       setEditedText(newText);
       setAiInstruction("");
     } catch (e) {
@@ -71,7 +83,7 @@ export function SendStep({ text, imageBase64, imageMediaType, onBack, onEdit, on
     }
     setSendLoading(true);
     try {
-      await onSend(to.trim(), editedText, imageBase64, imageMediaType || undefined);
+      await onSend(to.trim(), editedText, current?.imageBase64 || null, current?.imageMediaType || undefined);
       setSent(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Ошибка отправки");
@@ -84,6 +96,22 @@ export function SendStep({ text, imageBase64, imageMediaType, onBack, onEdit, on
     <>
       <section className="card">
         <h2>Редактирование</h2>
+        {creatives.length > 1 && (
+          <div className="mb1">
+            <label className="label" htmlFor="creative-select">Какой креатив редактируем</label>
+            <select
+              id="creative-select"
+              value={String(activeCreativeIndex)}
+              onChange={(e) => onSelectCreative(Number(e.target.value))}
+            >
+              {creatives.map((c, idx) => (
+                <option key={`${c.topicLabel}-${idx}`} value={String(idx)}>
+                  {idx + 1}. {c.topicLabel}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         <p className="label">Текст креатива (можно править вручную)</p>
         <textarea
           value={editedText}
@@ -102,6 +130,24 @@ export function SendStep({ text, imageBase64, imageMediaType, onBack, onEdit, on
           />
           <button onClick={handleAiEdit} disabled={editLoading || !aiInstruction.trim()}>
             {editLoading ? "…" : "Применить"}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            disabled={rerollLoading}
+            onClick={async () => {
+              setError("");
+              setRerollLoading(true);
+              try {
+                await onReroll();
+              } catch (e) {
+                setError(e instanceof Error ? e.message : "Ошибка");
+              } finally {
+                setRerollLoading(false);
+              }
+            }}
+          >
+            {rerollLoading ? "Переделываю…" : "Переделать креатив"}
           </button>
         </div>
         {error && <p className="error">{error}</p>}
