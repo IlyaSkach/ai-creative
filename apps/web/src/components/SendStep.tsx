@@ -4,12 +4,13 @@ import { fetchTelegramChatIds } from "../api";
 interface SendStepProps {
   text: string;
   imageBase64: string | null;
+  imageMediaType?: string | null;
   onBack: () => void;
   onEdit: (instruction: string) => Promise<string>;
-  onSend: (to: string, text: string, imageBase64?: string | null) => Promise<void>;
+  onSend: (to: string, text: string, imageBase64?: string | null, imageMediaType?: string | null) => Promise<void>;
 }
 
-export function SendStep({ text, imageBase64, onBack, onEdit, onSend }: SendStepProps) {
+export function SendStep({ text, imageBase64, imageMediaType, onBack, onEdit, onSend }: SendStepProps) {
   const [editedText, setEditedText] = useState(text);
   useEffect(() => setEditedText(text), [text]);
   const [aiInstruction, setAiInstruction] = useState("");
@@ -70,7 +71,7 @@ export function SendStep({ text, imageBase64, onBack, onEdit, onSend }: SendStep
     }
     setSendLoading(true);
     try {
-      await onSend(to.trim(), editedText, imageBase64);
+      await onSend(to.trim(), editedText, imageBase64, imageMediaType || undefined);
       setSent(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Ошибка отправки");

@@ -60,7 +60,10 @@ function buildMultipartBody(
   boundary: string,
   chatId: string,
   caption: string,
-  photoBuffer: Buffer
+  fileBuffer: Buffer,
+  fieldName: "photo" | "animation",
+  fileName: string,
+  contentType: string
 ): Buffer {
   const crlf = "\r\n";
   const parts: string[] = [
@@ -71,22 +74,49 @@ function buildMultipartBody(
     `--${boundary}`,
     `Content-Disposition: form-data; name="parse_mode"${crlf}${crlf}HTML`,
     `--${boundary}`,
-    `Content-Disposition: form-data; name="photo"; filename="image.png"`,
-    "Content-Type: image/png",
+    `Content-Disposition: form-data; name="${fieldName}"; filename="${fileName}"`,
+    `Content-Type: ${contentType}`,
     "",
   ];
   const head = parts.join(crlf) + crlf;
   const tail = crlf + `--${boundary}--` + crlf;
-  return Buffer.concat([Buffer.from(head, "utf8"), photoBuffer, Buffer.from(tail, "utf8")]);
+  return Buffer.concat([Buffer.from(head, "utf8"), fileBuffer, Buffer.from(tail, "utf8")]);
 }
 
-export async function sendPhoto(chatId: string, caption: string, photoBase64: string): Promise<void> {
+function getFileNameForMedia(mediaType: string, fallback: "png" | "gif" | "mp4"): string {
+  const lower = mediaType.toLowerCase();
+  if (lower.includes("gif")) return "creative.gif";
+  if (lower.includes("jpeg") || lower.includes("jpg")) return "creative.jpg";
+  if (lower.includes("webp")) return "creative.webp";
+  if (lower.startsWith("video/")) {
+    const ext = lower.split("/")[1] || "mp4";
+    return `creative.${ext}`;
+  }
+  return `creative.${fallback}`;
+}
+
+async function sendMediaMultipart(
+  method: "sendPhoto" | "sendAnimation",
+  fieldName: "photo" | "animation",
+  chatId: string,
+  caption: string,
+  mediaBase64: string,
+  mediaType: string
+): Promise<void> {
   const token = getBotToken();
   if (!token) throw new Error("TELEGRAM_BOT_TOKEN не задан");
-  const url = `${BASE}${token}/sendPhoto`;
-  const photoBuffer = Buffer.from(photoBase64, "base64");
+  const url = `${BASE}${token}/${method}`;
+  const mediaBuffer = Buffer.from(mediaBase64, "base64");
   const boundary = `----FormBoundary${Date.now()}${Math.random().toString(36).slice(2)}`;
-  const body = buildMultipartBody(boundary, chatId, caption, photoBuffer);
+  const body = buildMultipartBody(
+    boundary,
+    chatId,
+    caption,
+    mediaBuffer,
+    fieldName,
+    getFileNameForMedia(mediaType, method === "sendPhoto" ? "png" : "gif"),
+    mediaType
+  );
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), SEND_PHOTO_TIMEOUT_MS);
@@ -114,8 +144,26 @@ export async function sendPhoto(chatId: string, caption: string, photoBase64: st
   } catch (e) {
     clearTimeout(timeoutId);
     if (e instanceof Error && e.name === "AbortError") {
-      throw new Error("Таймаут отправки фото (60 сек). Попробуйте «Только текст» или отправьте без картинки.");
+      throw new Error("Таймаут отправки медиа (60 сек). Попробуйте «Только текст» или отправьте позже.");
     }
     throw e;
   }
+}
+
+export async function sendPhoto(
+  chatId: string,
+  caption: string,
+  photoBase64: string,
+  mediaType = "image/png"
+): Promise<void> {
+  await sendMediaMultipart("sendPhoto", "photo", chatId, caption, photoBase64, mediaType);
+}
+
+export async function sendAnimation(
+  chatId: string,
+  caption: string,
+  animationBase64: string,
+  mediaType = "image/gif"
+): Promise<void> {
+  await sendMediaMultipart("sendAnimation", "animation", chatId, caption, animationBase64, mediaType);
 }

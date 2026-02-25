@@ -9,6 +9,26 @@ function getConfig() {
   };
 }
 
+function sanitizeForModel(input: string): string {
+  const normalized = input
+    .normalize("NFKC")
+    .replace(/\u0000/g, " ")
+    .replace(/[\u0001-\u0008\u000B\u000C\u000E-\u001F]/g, " ")
+    // Удаляем суррогатные пары/полусуррогаты, которые иногда ломают JSON-парсеры провайдера
+    .replace(/[\uD800-\uDFFF]/g, " ")
+    // У некоторых провайдеров LLM бывают баги с escape-последовательностями в длинных payload
+    .replace(/\\/g, "/")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  return normalized;
+}
+
+function trimForModel(input: string, maxLen: number): string {
+  const s = sanitizeForModel(input);
+  if (s.length <= maxLen) return s;
+  return `${s.slice(0, maxLen)}…`;
+}
+
 export interface ChannelInfo {
   title: string;
   description: string;
@@ -34,14 +54,33 @@ function buildContext(info: ChannelInfo, selectedTopic?: string): string {
   }
   if (info.posts.length > 0) {
     const byEngagement = [...info.posts].sort((a, b) => engagementScore(b) - engagementScore(a));
-    const topPosts = byEngagement.slice(0, 10);
+    const topPosts = byEngagement.slice(0, 6);
     context += "\nПосты с наибольшим охватом (просмотры и реакции) — опирайся на них для креатива:\n";
     for (const p of topPosts) {
       const meta = [p.views != null && `просмотров: ${p.views}`, p.reactionsCount != null && p.reactionsCount > 0 && `реакций: ${p.reactionsCount}`].filter(Boolean).join(", ");
-      context += `- ${meta ? `[${meta}] ` : ""}${p.text.slice(0, 500)}${p.text.length > 500 ? "…" : ""}\n`;
+      const safeText = trimForModel(p.text, 220);
+      context += `- ${meta ? `[${meta}] ` : ""}${safeText}\n`;
     }
   }
-  return context;
+  return trimForModel(context, 3500);
+}
+
+function buildPostIndexContext(info: ChannelInfo): string {
+  if (!info.posts || info.posts.length === 0) return "";
+  const lines: string[] = [];
+  for (let i = 0; i < info.posts.length; i++) {
+    const p = info.posts[i];
+    const hasMedia = p.photoBase64 ? "yes" : "no";
+    const meta = [
+      p.views != null ? `views:${p.views}` : "",
+      p.reactionsCount != null ? `reactions:${p.reactionsCount}` : "",
+      `media:${hasMedia}`,
+    ]
+      .filter(Boolean)
+      .join(", ");
+    lines.push(`#${i + 1} [${meta}] ${trimForModel(p.text, 140)}`);
+  }
+  return trimForModel(lines.join("\n"), 2600);
 }
 
 function extractModelText(data: { choices?: Array<{ message?: { content?: string } }> }): string {
@@ -59,10 +98,10 @@ export async function analyzeChannelTopics(channelInfo: ChannelInfo): Promise<To
   const posts = channelInfo.posts
     .slice()
     .sort((a, b) => engagementScore(b) - engagementScore(a))
-    .slice(0, 30)
+    .slice(0, 12)
     .map((p) => p.text)
     .filter((t) => t && t.trim().length > 0)
-    .map((t) => t.slice(0, 400));
+    .map((t) => trimForModel(t, 220));
 
   if (posts.length === 0) {
     return {
@@ -72,7 +111,7 @@ export async function analyzeChannelTopics(channelInfo: ChannelInfo): Promise<To
   }
 
   const system = "Ты — аналитик Telegram-каналов. Выделяй основные тематические направления канала по постам.";
-  const user = `Данные канала:
+  const user = sanitizeForModel(`Данные канала:
 Название: ${channelInfo.title}
 Описание: ${channelInfo.description}
 Ссылка: ${channelInfo.channelLink}
@@ -89,7 +128,7 @@ ${posts.map((p) => `- ${p}`).join("\n")}
 Требования:
 - topics: от 1 до 6 пунктов
 - темы короткие и конкретные
-- без markdown, только JSON`;
+- без markdown, только JSON`);
 
   const res = await fetch(`${DEEPSEEK_BASE}/v1/chat/completions`, {
     method: "POST",
@@ -135,15 +174,40 @@ export async function generateCreative(
   channelInfo: ChannelInfo,
   withImage: boolean,
   selectedTopic?: string
-): Promise<{ text: string; imagePrompt: string | null }> {
+): Promise<{ text: string; imagePrompt: string | null; sourcePostIndex: number | null }> {
   const { base: DEEPSEEK_BASE, apiKey: API_KEY } = getConfig();
   if (!API_KEY) throw new Error("DEEPSEEK_API_KEY не задан");
   const context = buildContext(channelInfo, selectedTopic);
-  const system = `Ты — креативщик для рекламы Telegram-каналов. Твоя задача: создать короткий рекламный пост-креатив по тематике канала.
+  const indexedPostsContext = buildPostIndexContext(channelInfo);
+  const system = sanitizeForModel(`Ты — креативщик для рекламы Telegram-каналов. Твоя задача: создать рекламный пост-креатив по тематике канала.
 Креатив должен быть эксклюзивным: опирайся на конкретные посты и темы канала (например, если есть пост про "SEO в 2026" — упомяни это в креативе: "Всё про SEO в 2026 и не только — подписывайтесь").
-Обязательно включи призыв зайти в канал и ссылку на канал. Длина 200–400 символов, можно эмодзи.
-Если выбрана конкретная тема — креатив должен фокусироваться именно на ней.`;
-  const user = `${context}\n\nСгенерируй креатив.${selectedTopic ? ` Фокус-тема: ${selectedTopic}.` : ""} Ответь СТРОГО в формате JSON, без markdown и лишнего текста:\n{\n  "text": "Текст креатива со ссылкой на канал",\n  "image_prompt": "короткое описание картинки на английском для DALL-E, до 150 символов, или null если картинка не нужна"\n}\n${withImage ? "Нужна картинка — заполни image_prompt на английском." : "Картинка не нужна — в image_prompt укажи null."}`;
+Обязательно включи призыв зайти в канал и ссылку на канал.
+Сделай текст длиннее и структурированнее: 2–3 абзаца, с пустой строкой между абзацами.
+Целевая длина: 450–800 символов.
+Добавь уместные эмодзи в текст (обычно 2–6 штук на весь креатив, без перегруза).
+Если выбрана конкретная тема — креатив должен фокусироваться именно на ней.
+Без markdown.`);
+  const user = sanitizeForModel(`${context}
+
+Посты с индексами (используй их для выбора релевантного поста по теме):
+${indexedPostsContext || "Нет постов"}
+
+Сгенерируй креатив.${selectedTopic ? ` Фокус-тема: ${selectedTopic}.` : ""}
+
+Ответь СТРОГО в формате JSON, без markdown и лишнего текста:
+{
+  "text": "Текст креатива со ссылкой на канал",
+  "image_prompt": "короткое описание картинки на английском для DALL-E, до 150 символов, или null если картинка не нужна",
+  "source_post_index": 1
+}
+
+Требования к source_post_index:
+- это номер поста из списка выше (1..N) или null
+- если есть выбранная тема, укажи номер поста, который лучше всего соответствует теме
+- при равенстве выбирай пост с media:yes
+- если релевантного поста нет, укажи null
+
+${withImage ? "Нужна картинка — заполни image_prompt на английском." : "Картинка не нужна — в image_prompt укажи null."}`);
 
   const res = await fetch(`${DEEPSEEK_BASE}/v1/chat/completions`, {
     method: "POST",
@@ -169,15 +233,25 @@ export async function generateCreative(
   const cleaned = cleanJsonString(content);
   let text = content;
   let imagePrompt: string | null = null;
+  let sourcePostIndex: number | null = null;
   try {
-    const parsed = JSON.parse(cleaned) as { text?: string; image_prompt?: string | null };
+    const parsed = JSON.parse(cleaned) as { text?: string; image_prompt?: string | null; source_post_index?: number | null | string };
     text = parsed.text || content;
     imagePrompt = parsed.image_prompt ?? null;
     if (imagePrompt === "null" || imagePrompt === "") imagePrompt = null;
+    const rawIndex = typeof parsed.source_post_index === "string"
+      ? Number(parsed.source_post_index)
+      : parsed.source_post_index;
+    if (typeof rawIndex === "number" && Number.isFinite(rawIndex)) {
+      const normalized = Math.trunc(rawIndex);
+      if (normalized >= 1 && normalized <= channelInfo.posts.length) {
+        sourcePostIndex = normalized;
+      }
+    }
   } catch {
     // use raw as text
   }
-  return { text, imagePrompt: withImage ? imagePrompt : null };
+  return { text, imagePrompt: withImage ? imagePrompt : null, sourcePostIndex };
 }
 
 export async function editCreativeWithAi(
@@ -202,7 +276,7 @@ export async function editCreativeWithAi(
         },
         {
           role: "user",
-          content: `Текущий текст креатива:\n${currentText}\n\nПользователь просит: ${userInstruction}\n\nВерни только обновлённый текст креатива.`,
+          content: sanitizeForModel(`Текущий текст креатива:\n${currentText}\n\nПользователь просит: ${userInstruction}\n\nВерни только обновлённый текст креатива.`),
         },
       ],
       temperature: 0.5,

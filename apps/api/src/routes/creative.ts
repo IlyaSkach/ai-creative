@@ -31,7 +31,7 @@ creativeRouter.post("/generate", async (req, res) => {
       res.status(400).json({ error: "Нужны данные канала (channelInfo). Сначала вызовите /api/channel/analyze" });
       return;
     }
-    const { text, imagePrompt } = await generateCreative(channelInfo, Boolean(withImage), selectedTopic);
+    const { text, imagePrompt, sourcePostIndex } = await generateCreative(channelInfo, Boolean(withImage), selectedTopic);
     let imageBase64: string | null = null;
     let imageError: string | null = null;
     if (withImage && imagePrompt) {
@@ -42,7 +42,7 @@ creativeRouter.post("/generate", async (req, res) => {
         console.error("BotHub image error:", imageError);
       }
     }
-    res.json({ text, imageBase64, imagePrompt: imagePrompt || null, imageError });
+    res.json({ text, imageBase64, imagePrompt: imagePrompt || null, imageError, sourcePostIndex });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Ошибка генерации креатива";
     res.status(500).json({ error: message });

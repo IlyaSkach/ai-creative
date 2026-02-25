@@ -4,7 +4,7 @@ import { analyzeChannelTopics, generateCreative } from "../api";
 
 interface CreativeStepProps {
   channelInfo: ChannelInfo;
-  onDone: (text: string, imageBase64: string | null) => void;
+  onDone: (text: string, imageBase64: string | null, imageMediaType?: string | null) => void;
 }
 
 type ImageMode = "none" | "generated" | "from_post";
@@ -20,6 +20,61 @@ function getFirstPostMedia(channelInfo: ChannelInfo): { base64: string; mediaTyp
   const best = withMedia.sort((a, b) => engagementScore(b) - engagementScore(a))[0];
   if (!best?.photoBase64) return null;
   return { base64: best.photoBase64, mediaType: best.mediaType || "image/jpeg" };
+}
+
+function pickMediaByTopic(
+  channelInfo: ChannelInfo,
+  selectedTopic: string
+): { base64: string; mediaType: string } | null {
+  const withMedia = channelInfo.posts.filter((p) => p.photoBase64);
+  if (withMedia.length === 0) return null;
+
+  // Для режима ссылки на конкретный пост всегда берем медиа именно из этого поста.
+  if (channelInfo.directPostMode && withMedia[0]?.photoBase64) {
+    return {
+      base64: withMedia[0].photoBase64,
+      mediaType: withMedia[0].mediaType || "image/jpeg",
+    };
+  }
+
+  if (selectedTopic && selectedTopic !== ALL_TOPICS) {
+    const keywords = selectedTopic
+      .toLowerCase()
+      .split(/[^a-zA-Zа-яА-Я0-9]+/u)
+      .map((w) => w.trim())
+      .filter((w) => w.length >= 4);
+
+    if (keywords.length > 0) {
+      const matched = withMedia.filter((post) => {
+        const text = (post.text || "").toLowerCase();
+        return keywords.some((k) => text.includes(k));
+      });
+      if (matched.length > 0) {
+        const bestMatched = matched.sort((a, b) => engagementScore(b) - engagementScore(a))[0];
+        if (bestMatched?.photoBase64) {
+          return {
+            base64: bestMatched.photoBase64,
+            mediaType: bestMatched.mediaType || "image/jpeg",
+          };
+        }
+      }
+    }
+  }
+
+  return getFirstPostMedia(channelInfo);
+}
+
+function pickMediaBySourcePostIndex(
+  channelInfo: ChannelInfo,
+  sourcePostIndex?: number | null
+): { base64: string; mediaType: string } | null {
+  if (!sourcePostIndex || sourcePostIndex < 1) return null;
+  const post = channelInfo.posts[sourcePostIndex - 1];
+  if (!post?.photoBase64) return null;
+  return {
+    base64: post.photoBase64,
+    mediaType: post.mediaType || "image/jpeg",
+  };
 }
 
 export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
@@ -86,7 +141,8 @@ export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
         setImageBase64(result.imageBase64);
         setImageError(result.imageError || null);
       } else if (imageMode === "from_post") {
-        const postMedia = getFirstPostMedia(channelInfo);
+        const mediaBySource = pickMediaBySourcePostIndex(channelInfo, result.sourcePostIndex);
+        const postMedia = mediaBySource || pickMediaByTopic(channelInfo, selectedTopic);
         if (postMedia) {
           setImageBase64(postMedia.base64);
           setImageMediaType(postMedia.mediaType);
@@ -114,7 +170,7 @@ export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
   };
 
   const handleNext = () => {
-    onDone(text, imageBase64);
+    onDone(text, imageBase64, imageBase64 ? imageMediaType : null);
   };
 
   return (
@@ -236,11 +292,22 @@ export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
           {imageError && <p className="error mb1">Картинка: {imageError}</p>}
           {imageBase64 && (
             <div className="mb1">
-              <img
-                src={`data:${imageFromPost ? imageMediaType : "image/png"};base64,${imageBase64}`}
-                alt="Креатив"
-                style={{ maxWidth: "100%", borderRadius: "var(--radius)", border: "1px solid var(--border)" }}
-              />
+              {(imageMediaType || "").toLowerCase().startsWith("video/") ? (
+                <video
+                  src={`data:${imageMediaType};base64,${imageBase64}`}
+                  style={{ maxWidth: "100%", borderRadius: "var(--radius)", border: "1px solid var(--border)" }}
+                  controls
+                  loop
+                  muted
+                  playsInline
+                />
+              ) : (
+                <img
+                  src={`data:${imageFromPost ? imageMediaType : "image/png"};base64,${imageBase64}`}
+                  alt="Креатив"
+                  style={{ maxWidth: "100%", borderRadius: "var(--radius)", border: "1px solid var(--border)" }}
+                />
+              )}
             </div>
           )}
           <textarea

@@ -6,11 +6,34 @@ export interface ChannelInfo {
   username: string;
   channelLink: string;
   posts: Array<{ date: string; text: string; photoBase64?: string; mediaType?: string; views?: number; reactionsCount?: number }>;
+  directPostMode?: boolean;
+  sourcePostLink?: string;
 }
 
 export interface ChannelTopics {
   summary: string;
   topics: string[];
+}
+
+async function parseApiResponse<T>(res: Response, fallbackError: string): Promise<T> {
+  const raw = await res.text();
+  let data: unknown = null;
+  try {
+    data = raw ? JSON.parse(raw) : null;
+  } catch {
+    if (!res.ok) {
+      throw new Error(`${fallbackError}: HTTP ${res.status}`);
+    }
+    throw new Error("Сервер вернул невалидный JSON");
+  }
+  if (!res.ok) {
+    const msg =
+      typeof data === "object" && data !== null && "error" in data && typeof (data as { error?: unknown }).error === "string"
+        ? (data as { error: string }).error
+        : `${fallbackError}: HTTP ${res.status}`;
+    throw new Error(msg);
+  }
+  return data as T;
 }
 
 export async function analyzeChannel(link: string): Promise<ChannelInfo> {
@@ -19,24 +42,23 @@ export async function analyzeChannel(link: string): Promise<ChannelInfo> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ link }),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || "Ошибка анализа канала");
-  return data;
+  return parseApiResponse<ChannelInfo>(res, "Ошибка анализа канала");
 }
 
 export async function generateCreative(
   channelInfo: ChannelInfo,
   withImage: boolean,
   selectedTopic?: string
-): Promise<{ text: string; imageBase64: string | null; imagePrompt: string | null; imageError?: string | null }> {
+): Promise<{ text: string; imageBase64: string | null; imagePrompt: string | null; imageError?: string | null; sourcePostIndex?: number | null }> {
   const res = await fetch(`${API}/creative/generate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ channelInfo, withImage, selectedTopic }),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || "Ошибка генерации");
-  return data;
+  return parseApiResponse<{ text: string; imageBase64: string | null; imagePrompt: string | null; imageError?: string | null; sourcePostIndex?: number | null }>(
+    res,
+    "Ошибка генерации"
+  );
 }
 
 export async function analyzeChannelTopics(channelInfo: ChannelInfo): Promise<ChannelTopics> {
@@ -45,9 +67,7 @@ export async function analyzeChannelTopics(channelInfo: ChannelInfo): Promise<Ch
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ channelInfo }),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || "Ошибка анализа тем");
-  return data as ChannelTopics;
+  return parseApiResponse<ChannelTopics>(res, "Ошибка анализа тем");
 }
 
 export async function editCreativeWithAi(
@@ -59,28 +79,31 @@ export async function editCreativeWithAi(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text, instruction }),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || "Ошибка редактирования");
+  const data = await parseApiResponse<{ text: string }>(res, "Ошибка редактирования");
   return data.text;
 }
 
 export async function sendToTelegram(
   to: string,
   text: string,
-  imageBase64?: string | null
+  imageBase64?: string | null,
+  imageMediaType?: string | null
 ): Promise<void> {
   const res = await fetch(`${API}/telegram/send`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ to, text, imageBase64: imageBase64 || undefined }),
+    body: JSON.stringify({
+      to,
+      text,
+      imageBase64: imageBase64 || undefined,
+      imageMediaType: imageMediaType || undefined,
+    }),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || "Ошибка отправки");
+  await parseApiResponse<{ ok: boolean }>(res, "Ошибка отправки");
 }
 
 export async function fetchTelegramChatIds(): Promise<Array<{ chatId: number; username?: string }>> {
   const res = await fetch(`${API}/telegram/updates`);
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || "Ошибка");
+  const data = await parseApiResponse<{ chats?: Array<{ chatId: number; username?: string }> }>(res, "Ошибка");
   return data.chats || [];
 }

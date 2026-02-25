@@ -7,7 +7,7 @@ import fs from "fs";
 import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const TME_URL = "https://t.me";
+const TME_URLS = ["https://t.me", "https://telegram.me", "https://telegram.dog"];
 
 function getSessionString(): string {
   const fromEnv = process.env.TELEGRAM_SESSION_STRING?.trim();
@@ -63,28 +63,59 @@ export interface ChannelInfo {
   username: string;
   channelLink: string;
   posts: ChannelPost[];
+  directPostMode?: boolean;
+  sourcePostLink?: string;
+}
+
+interface ParsedInput {
+  username: string;
+  postId?: number;
+}
+
+function parseInput(input: string): ParsedInput | null {
+  const s = input.trim();
+  const postMatch = s.match(/(?:t\.me|telegram\.me|telegram\.dog)\/([a-zA-Z0-9_]+)\/(\d+)/i);
+  if (postMatch) {
+    return { username: postMatch[1], postId: Number(postMatch[2]) || undefined };
+  }
+  const username = extractUsername(s);
+  if (!username) return null;
+  return { username };
 }
 
 export async function parseChannelFromTme(linkOrUsername: string): Promise<ChannelInfo> {
-  const username = extractUsername(linkOrUsername);
-  if (!username) {
+  const parsedInput = parseInput(linkOrUsername);
+  if (!parsedInput?.username) {
     throw new Error("Не удалось извлечь username. Укажите ссылку (t.me/username) или @username");
   }
-  const url = `${TME_URL}/${username}`;
-  const res = await fetch(url, { headers: { "Accept": "text/html" } });
-  if (!res.ok) {
-    throw new Error(`Страница канала не загрузилась: ${res.status}. Проверьте ссылку.`);
-  }
-  const html = await res.text();
-  if (html.length < 100) {
-    throw new Error("Страница канала пуста или недоступна.");
-  }
-  const { title, description } = parseTmePage(html);
+  const { username, postId } = parsedInput;
+  let title = `@${username}`;
+  let description = "";
   const channelLink = `https://t.me/${username}`;
+  let pageLoaded = false;
+  for (const baseUrl of TME_URLS) {
+    try {
+      const url = `${baseUrl}/${username}`;
+      const res = await fetch(url, { headers: { Accept: "text/html" } });
+      if (!res.ok) continue;
+      const html = await res.text();
+      if (html.length < 100) continue;
+      const parsed = parseTmePage(html);
+      title = parsed.title || title;
+      description = parsed.description || description;
+      pageLoaded = true;
+      break;
+    } catch {
+      // try next mirror
+    }
+  }
+  if (!pageLoaded) {
+    console.warn(`[channelParser] Не удалось загрузить страницу t.me для @${username}. Продолжаем без title/description со страницы.`);
+  }
   // Таймаут: первое подключение gramjs к Telegram может занимать 1–2 мин при нестабильной сети
   const POSTS_TIMEOUT_MS = 180000; // 3 мин
   const posts = await Promise.race([
-    fetchPostsIfAvailable(username),
+    postId ? fetchSpecificPostIfAvailable(username, postId) : fetchPostsIfAvailable(username),
     new Promise<ChannelPost[]>((resolve) =>
       setTimeout(() => {
         console.log("[channelParser] Загрузка постов прервана по таймауту", POSTS_TIMEOUT_MS / 1000, "с");
@@ -92,7 +123,15 @@ export async function parseChannelFromTme(linkOrUsername: string): Promise<Chann
       }, POSTS_TIMEOUT_MS)
     ),
   ]);
-  return { title, description, username, channelLink, posts };
+  return {
+    title,
+    description,
+    username,
+    channelLink,
+    posts,
+    directPostMode: Boolean(postId && posts.length <= 1),
+    sourcePostLink: postId ? `https://t.me/${username}/${postId}` : undefined,
+  };
 }
 
 const MAX_POSTS_WITH_PHOTOS = 5;
@@ -103,6 +142,81 @@ function getReactionsCount(msg: { reactions?: { results?: Array<{ count?: number
   const results = msg.reactions?.results;
   if (!Array.isArray(results)) return 0;
   return results.reduce((s, r) => s + (Number(r.count) || 0), 0);
+}
+
+function buildTelegramClientOptions() {
+  const proxyHost = process.env.TELEGRAM_PROXY_HOST?.trim();
+  const proxyPortRaw = process.env.TELEGRAM_PROXY_PORT?.trim();
+  const proxyPort = proxyPortRaw ? Number(proxyPortRaw) : 0;
+  const proxyUser = process.env.TELEGRAM_PROXY_USER?.trim();
+  const proxyPass = process.env.TELEGRAM_PROXY_PASS?.trim();
+  const clientOptions: any = {
+    connectionRetries: 10,
+    useWSS: false,
+    timeout: 60,
+    requestRetries: 3,
+  };
+  if (proxyHost && proxyPort > 0) {
+    clientOptions.proxy = {
+      ip: proxyHost,
+      port: proxyPort,
+      socksType: 5,
+      username: proxyUser || undefined,
+      password: proxyPass || undefined,
+      timeout: 15,
+    };
+    console.log(`[channelParser] Используем SOCKS5 прокси ${proxyHost}:${proxyPort} для Telegram Client`);
+  }
+  return clientOptions;
+}
+
+async function mapMessageToPost(
+  client: any,
+  m: unknown,
+  mediaDownloadedRef: { value: number },
+  preferAnyMedia = false
+): Promise<ChannelPost | null> {
+  const msg = m as {
+    date?: number;
+    message?: string;
+    text?: string;
+    views?: number;
+    reactions?: { results?: Array<{ count?: number }> };
+    media?: { className?: string; photo?: unknown; document?: { mimeType?: string; mime_type?: string } };
+  };
+  const date = msg.date ? new Date(msg.date * 1000) : new Date();
+  const text = (msg.message ?? msg.text ?? "").trim();
+  const views = typeof msg.views === "number" ? msg.views : 0;
+  const reactionsCount = getReactionsCount(msg);
+  let photoBase64: string | undefined;
+  let mediaType: string | undefined;
+  const isPhoto = msg.media && (String(msg.media.className) === "MessageMediaPhoto" || msg.media.photo);
+  const doc = msg.media?.className === "MessageMediaDocument" ? msg.media.document : null;
+  const mime = doc && (doc.mimeType || doc.mime_type);
+  const isImageDoc = mime && /^image\/(gif|jpeg|jpg|png|webp)$/i.test(mime);
+  const hasMedia = mediaDownloadedRef.value < MAX_POSTS_WITH_PHOTOS && (isPhoto || isImageDoc || (preferAnyMedia && Boolean(msg.media)));
+  if (hasMedia) {
+    try {
+      const buf = await client.downloadMedia(m as never, {});
+      if (buf && Buffer.isBuffer(buf)) {
+        photoBase64 = buf.toString("base64");
+        mediaType = isPhoto ? "image/jpeg" : (mime || "image/png");
+        mediaDownloadedRef.value += 1;
+      }
+    } catch {
+      // skip
+    }
+  }
+  const hasAnyMedia = Boolean(msg.media);
+  if (!(text || photoBase64 || hasAnyMedia)) return null;
+  return {
+    date: date.toISOString(),
+    text: text || "(пост без текста)",
+    photoBase64,
+    mediaType,
+    views: views || undefined,
+    reactionsCount: reactionsCount || undefined,
+  };
 }
 
 async function fetchPostsIfAvailable(username: string): Promise<ChannelPost[]> {
@@ -117,16 +231,17 @@ async function fetchPostsIfAvailable(username: string): Promise<ChannelPost[]> {
     const { TelegramClient } = await import("telegram");
     const { StringSession } = await import("telegram/sessions/index.js");
     const { Api } = await import("telegram/tl/index.js");
+    const clientOptions = buildTelegramClientOptions();
     const client = new TelegramClient(
       new StringSession(sessionString),
       Number(apiId),
       apiHash,
-      { connectionRetries: 5, timeout: 60 }
+      clientOptions
     );
     await client.connect();
     const entity = await client.getEntity(username.startsWith("@") ? username : `@${username}`);
     const posts: ChannelPost[] = [];
-    let mediaDownloaded = 0;
+    const mediaDownloadedRef = { value: 0 };
     let offsetId = 0;
     let firstBatch: unknown[] = [];
     for (let i = 0; i < 3; i++) {
@@ -150,48 +265,8 @@ async function fetchPostsIfAvailable(username: string): Promise<ChannelPost[]> {
       if (messages.length === 0) break;
       for (const m of messages) {
         if (posts.length >= LAST_POSTS_LIMIT) break;
-        const msg = m as {
-          date?: number;
-          message?: string;
-          text?: string;
-          views?: number;
-          reactions?: { results?: Array<{ count?: number }> };
-          media?: { className?: string; photo?: unknown; document?: { mimeType?: string; mime_type?: string } };
-        };
-        const date = msg.date ? new Date(msg.date * 1000) : new Date();
-        const text = (msg.message ?? msg.text ?? "").trim();
-        const views = typeof msg.views === "number" ? msg.views : 0;
-        const reactionsCount = getReactionsCount(msg);
-        let photoBase64: string | undefined;
-        let mediaType: string | undefined;
-        const isPhoto = msg.media && (String(msg.media.className) === "MessageMediaPhoto" || msg.media.photo);
-        const doc = msg.media?.className === "MessageMediaDocument" ? msg.media.document : null;
-        const mime = doc && (doc.mimeType || doc.mime_type);
-        const isImageDoc = mime && /^image\/(gif|jpeg|jpg|png|webp)$/i.test(mime);
-        const hasMedia = mediaDownloaded < MAX_POSTS_WITH_PHOTOS && (isPhoto || isImageDoc);
-        if (hasMedia) {
-          try {
-            const buf = await client.downloadMedia(m as never, {});
-            if (buf && Buffer.isBuffer(buf)) {
-              photoBase64 = buf.toString("base64");
-              mediaType = isPhoto ? "image/jpeg" : (mime || "image/png");
-              mediaDownloaded++;
-            }
-          } catch (_) {
-            // skip
-          }
-        }
-        const hasAnyMedia = Boolean(msg.media);
-        if (text || photoBase64 || hasAnyMedia) {
-          posts.push({
-            date: date.toISOString(),
-            text: text || "(пост без текста)",
-            photoBase64,
-            mediaType,
-            views: views || undefined,
-            reactionsCount: reactionsCount || undefined,
-          });
-        }
+        const post = await mapMessageToPost(client, m, mediaDownloadedRef);
+        if (post) posts.push(post);
       }
       if (posts.length >= LAST_POSTS_LIMIT) break;
       const lastMsg = messages[messages.length - 1] as { id?: number };
@@ -208,5 +283,65 @@ async function fetchPostsIfAvailable(username: string): Promise<ChannelPost[]> {
   } catch (e) {
     console.error("[channelParser] Ошибка загрузки постов:", e instanceof Error ? e.message : e);
     return [];
+  }
+}
+
+async function fetchSpecificPostIfAvailable(username: string, postId: number): Promise<ChannelPost[]> {
+  const apiId = process.env.TELEGRAM_API_ID;
+  const apiHash = process.env.TELEGRAM_API_HASH;
+  const sessionString = getSessionString();
+  if (!apiId || !apiHash || !sessionString) {
+    console.log("[channelParser] Пост не загружается: нет API_ID, API_HASH или сессии в .env");
+    return [];
+  }
+  try {
+    const { TelegramClient } = await import("telegram");
+    const { StringSession } = await import("telegram/sessions/index.js");
+    const { Api } = await import("telegram/tl/index.js");
+    const client = new TelegramClient(
+      new StringSession(sessionString),
+      Number(apiId),
+      apiHash,
+      buildTelegramClientOptions()
+    );
+    await client.connect();
+    const entity = await client.getEntity(username.startsWith("@") ? username : `@${username}`);
+    let target: unknown | null = null;
+    let offsetId = postId + 1;
+    for (let i = 0; i < 6; i++) {
+      const res = await client.invoke(
+        new Api.messages.GetHistory({
+          peer: entity,
+          offsetId,
+          offsetDate: 0,
+          addOffset: 0,
+          limit: 100,
+          maxId: 0,
+          minId: 0,
+          hash: 0 as any,
+        })
+      );
+      const messages = (res as { messages?: unknown[] }).messages || [];
+      if (messages.length === 0) break;
+      const found = messages.find((m) => (m as { id?: number }).id === postId);
+      if (found) {
+        target = found;
+        break;
+      }
+      offsetId = ((messages[messages.length - 1] as { id?: number }).id || 0);
+      if (!offsetId || offsetId <= 1) break;
+    }
+    if (!target) {
+      await client.disconnect();
+      console.log(`[channelParser] Пост ${postId} не найден в истории @${username}, используем обычный режим постов.`);
+      return fetchPostsIfAvailable(username);
+    }
+    let mediaDownloaded = { value: 0 };
+    const post = await mapMessageToPost(client, target, mediaDownloaded, true);
+    await client.disconnect();
+    return post ? [post] : [];
+  } catch (e) {
+    console.error("[channelParser] Ошибка загрузки конкретного поста:", e instanceof Error ? e.message : e);
+    return fetchPostsIfAvailable(username);
   }
 }

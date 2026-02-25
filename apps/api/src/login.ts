@@ -145,7 +145,7 @@ async function main() {
               console.log("Срок действия токена (unix):", expires);
             },
             password: askPasswordQuick,
-            onError: (err) => {
+            onError: async (err) => {
               console.error(err);
               return false;
             },

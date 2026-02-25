@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { sendMessage, sendPhoto, getUpdates } from "../services/telegram.js";
+import { sendMessage, sendPhoto, sendAnimation, getUpdates } from "../services/telegram.js";
 
 export const telegramRouter = Router();
 
@@ -33,14 +33,15 @@ telegramRouter.get("/updates", async (_req, res) => {
 
 /**
  * Отправка креатива в Telegram.
- * Body: { to: string (username @user или chat_id), text: string, imageBase64?: string }
+ * Body: { to: string (username @user или chat_id), text: string, imageBase64?: string, imageMediaType?: string }
  */
 telegramRouter.post("/send", async (req, res) => {
   try {
-    const { to, text, imageBase64 } = req.body as {
+    const { to, text, imageBase64, imageMediaType } = req.body as {
       to?: string;
       text?: string;
       imageBase64?: string;
+      imageMediaType?: string;
     };
     if (!to || typeof to !== "string") {
       res.status(400).json({ error: "Укажите to — @username или chat_id получателя" });
@@ -52,7 +53,13 @@ telegramRouter.post("/send", async (req, res) => {
     }
     const chatId = to.startsWith("@") ? to : to.trim();
     if (imageBase64 && typeof imageBase64 === "string") {
-      await sendPhoto(chatId, text, imageBase64);
+      const mediaType = (imageMediaType || "image/png").toLowerCase();
+      const isAnimated = mediaType.includes("gif") || mediaType.startsWith("video/");
+      if (isAnimated) {
+        await sendAnimation(chatId, text, imageBase64, mediaType);
+      } else {
+        await sendPhoto(chatId, text, imageBase64, mediaType);
+      }
     } else {
       await sendMessage(chatId, text);
     }

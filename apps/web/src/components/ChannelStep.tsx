@@ -3,7 +3,7 @@ import type { ChannelInfo } from "../api";
 import { analyzeChannel } from "../api";
 
 interface ChannelStepProps {
-  onDone: (info: ChannelInfo) => void;
+  onDone: (info: ChannelInfo) => void | Promise<void>;
 }
 
 export function ChannelStep({ onDone }: ChannelStepProps) {
@@ -21,7 +21,7 @@ export function ChannelStep({ onDone }: ChannelStepProps) {
     setLoading(true);
     try {
       const info = await analyzeChannel(link.trim());
-      onDone(info);
+      await onDone(info);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Ошибка");
     } finally {
@@ -34,12 +34,12 @@ export function ChannelStep({ onDone }: ChannelStepProps) {
       <h2>Ссылка на канал</h2>
       <form onSubmit={handleSubmit}>
         <label className="label" htmlFor="channel-link">
-          t.me/username или @username
+          t.me/username, @username или ссылка на пост t.me/username/123
         </label>
         <input
           id="channel-link"
           type="text"
-          placeholder="https://t.me/durov или @durov"
+          placeholder="https://t.me/durov, @durov или https://t.me/durov/123"
           value={link}
           onChange={(e) => setLink(e.target.value)}
           disabled={loading}
