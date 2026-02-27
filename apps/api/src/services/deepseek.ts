@@ -34,7 +34,7 @@ export interface ChannelInfo {
   description: string;
   username: string;
   channelLink: string;
-  posts: Array<{ date: string; text: string; photoBase64?: string; mediaType?: string; views?: number; reactionsCount?: number }>;
+  posts: Array<{ postId?: number; date: string; text: string; photoBase64?: string; mediaType?: string; views?: number; reactionsCount?: number }>;
 }
 
 export interface TopicsAnalysis {

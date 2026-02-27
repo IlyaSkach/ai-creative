@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { fetchTelegramChatIds } from "../api";
 import type { DraftCreative } from "./CreativeStep";
 
@@ -21,6 +21,7 @@ export function SendStep({
   onReroll,
   onSend,
 }: SendStepProps) {
+  const PETR_CHAT_ID = "140349245";
   const current = creatives[activeCreativeIndex];
   const [editedText, setEditedText] = useState(current?.text || "");
   useEffect(() => setEditedText(current?.text || ""), [current?.text, activeCreativeIndex]);
@@ -29,10 +30,19 @@ export function SendStep({
   const [rerollLoading, setRerollLoading] = useState(false);
   const [to, setTo] = useState("");
   const [sendLoading, setSendLoading] = useState(false);
+  const [sendProgress, setSendProgress] = useState("");
   const [error, setError] = useState("");
   const [sent, setSent] = useState(false);
   const [chatIdLoading, setChatIdLoading] = useState(false);
   const [chatIdResult, setChatIdResult] = useState<string | null>(null);
+  const textAreaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    const el = textAreaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [editedText, activeCreativeIndex]);
 
   const handleAiEdit = async () => {
     if (!aiInstruction.trim()) return;
@@ -77,13 +87,21 @@ export function SendStep({
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    setSent(false);
+    setSendProgress("");
     if (!to.trim()) {
       setError("Укажите получателя (chat_id или @channel)");
       return;
     }
     setSendLoading(true);
     try {
-      await onSend(to.trim(), editedText, current?.imageBase64 || null, current?.imageMediaType || undefined);
+      for (let i = 0; i < creatives.length; i++) {
+        const item = creatives[i];
+        const textToSend = i === activeCreativeIndex ? editedText : item.text;
+        setSendProgress(`Отправляю ${i + 1} из ${creatives.length}…`);
+        await onSend(to.trim(), textToSend, item.imageBase64 || null, item.imageMediaType || undefined);
+      }
+      setSendProgress(`Отправлено ${creatives.length} из ${creatives.length}.`);
       setSent(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Ошибка отправки");
@@ -114,9 +132,11 @@ export function SendStep({
         )}
         <p className="label">Текст креатива (можно править вручную)</p>
         <textarea
+          ref={textAreaRef}
           value={editedText}
           onChange={(e) => setEditedText(e.target.value)}
           placeholder="Текст креатива…"
+          style={{ overflow: "hidden", resize: "none" }}
         />
         <p className="label mt1">Или попросите ИИ изменить</p>
         <div className="flex" style={{ gap: "0.5rem", alignItems: "stretch" }}>
@@ -172,12 +192,25 @@ export function SendStep({
           Убедитесь, что это ваш chat_id. Если между вашим /start и нажатием кнопки кто-то ещё писал боту — будет показан его chat_id.
         </p>
         {sent ? (
-          <p style={{ color: "var(--accent)" }}>Сообщение отправлено.</p>
+          <p style={{ color: "var(--accent)" }}>
+            Отправлены все креативы: {creatives.length}.
+          </p>
         ) : (
           <form onSubmit={handleSend}>
             <div className="flex mb1" style={{ flexWrap: "wrap", gap: "0.5rem" }}>
               <button type="button" className="secondary" onClick={handleGetChatId} disabled={chatIdLoading}>
                 {chatIdLoading ? "Проверяю…" : "Узнать мой chat_id"}
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => {
+                  setTo(PETR_CHAT_ID);
+                  setChatIdResult(`Подставлен chat_id Петра: ${PETR_CHAT_ID}`);
+                }}
+                disabled={sendLoading || chatIdLoading}
+              >
+                Отправить Петр
               </button>
             </div>
             {chatIdResult && <p style={{ color: "var(--accent)", fontSize: "0.9rem", margin: "0 0 0.5rem" }}>{chatIdResult}</p>}
@@ -200,6 +233,11 @@ export function SendStep({
                 Назад
               </button>
             </div>
+            {sendProgress && (
+              <p style={{ color: "var(--muted)", fontSize: "0.9rem", marginTop: "0.6rem" }}>
+                {sendProgress}
+              </p>
+            )}
           </form>
         )}
       </section>

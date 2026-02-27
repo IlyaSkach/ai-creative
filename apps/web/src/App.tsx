@@ -41,6 +41,22 @@ function getNextSourcePostIndex(info: ChannelInfo, topic: string | undefined, cu
   return ranked[(pos + 1) % ranked.length];
 }
 
+function resolveSourcePostLink(info: ChannelInfo, sourcePostIndex?: number | null): string | null {
+  if (sourcePostIndex && sourcePostIndex >= 1 && sourcePostIndex <= info.posts.length) {
+    const post = info.posts[sourcePostIndex - 1];
+    if (post?.postId) return `https://t.me/${info.username}/${post.postId}`;
+  }
+  if (info.directPostMode && info.sourcePostLink) return info.sourcePostLink;
+  return null;
+}
+
+function appendSourcePostLink(text: string, link: string | null): string {
+  if (!link) return text;
+  const cleaned = text.trim();
+  if (cleaned.includes(link)) return cleaned;
+  return `${cleaned}\n\nПост-источник: ${link}`;
+}
+
 export default function App() {
   const [step, setStep] = useState<Step>("channel");
   const [channelInfo, setChannelInfo] = useState<ChannelInfo | null>(null);
@@ -65,6 +81,7 @@ export default function App() {
         topicLabel: "Креатив по выбранному посту",
         topicPrompt: undefined,
         selectedTopics: [],
+        attachSourcePostLink: false,
         imageMode: mediaFromPost ? "from_post" : "none",
         text: generated.text,
         imageBase64: mediaFromPost?.photoBase64 || null,
@@ -132,20 +149,38 @@ export default function App() {
           onEdit={async (instruction, currentText) => {
             if (!currentCreative) return "";
             const newText = await editCreativeWithAi(currentText || currentCreative.text, instruction);
-            setCreatives((prev) => prev.map((c, i) => i === activeCreativeIndex ? { ...c, text: newText } : c));
-            return newText;
+            const finalText = currentCreative.attachSourcePostLink
+              ? appendSourcePostLink(
+                  newText,
+                  channelInfo ? resolveSourcePostLink(channelInfo, currentCreative.sourcePostIndex) : null
+                )
+              : newText;
+            setCreatives((prev) => prev.map((c, i) => i === activeCreativeIndex ? { ...c, text: finalText } : c));
+            return finalText;
           }}
           onReroll={async () => {
             if (!channelInfo || !currentCreative) return;
             const topicPrompt = currentCreative.topicPrompt;
             const nextForcedIndex = getNextSourcePostIndex(channelInfo, topicPrompt, currentCreative.sourcePostIndex);
-            const withImage = currentCreative.imageMode === "generated";
-            const regenerated = await generateCreative(channelInfo, withImage, topicPrompt, nextForcedIndex);
+            const withImage = currentCreative.imageMode === "generated" || currentCreative.imageMode === "hybrid";
+            const sourcePost = nextForcedIndex ? channelInfo.posts[nextForcedIndex - 1] : undefined;
+            const regenerated = await generateCreative(
+              channelInfo,
+              withImage,
+              topicPrompt,
+              nextForcedIndex,
+              currentCreative.imageMode,
+              currentCreative.imageMode === "hybrid" ? (sourcePost?.photoBase64 || null) : null,
+              currentCreative.imageMode === "hybrid" ? (sourcePost?.mediaType || null) : null
+            );
             let nextImageBase64: string | null = null;
             let nextImageMediaType: string | null = null;
             if (currentCreative.imageMode === "generated") {
               nextImageBase64 = regenerated.imageBase64;
-              nextImageMediaType = regenerated.imageBase64 ? "image/png" : null;
+              nextImageMediaType = regenerated.imageMediaType || (regenerated.imageBase64 ? "image/png" : null);
+            } else if (currentCreative.imageMode === "hybrid") {
+              nextImageBase64 = regenerated.imageBase64;
+              nextImageMediaType = regenerated.imageMediaType || (regenerated.imageBase64 ? "image/png" : null);
             } else if (currentCreative.imageMode === "from_post") {
               const idx = regenerated.sourcePostIndex || nextForcedIndex || currentCreative.sourcePostIndex || 1;
               const post = channelInfo.posts[idx - 1];
@@ -154,7 +189,12 @@ export default function App() {
             }
             setCreatives((prev) => prev.map((c, i) => i === activeCreativeIndex ? {
               ...c,
-              text: regenerated.text,
+              text: c.attachSourcePostLink
+                ? appendSourcePostLink(
+                    regenerated.text,
+                    resolveSourcePostLink(channelInfo, regenerated.sourcePostIndex ?? nextForcedIndex ?? c.sourcePostIndex)
+                  )
+                : regenerated.text,
               sourcePostIndex: regenerated.sourcePostIndex ?? nextForcedIndex ?? c.sourcePostIndex,
               imageBase64: nextImageBase64,
               imageMediaType: nextImageMediaType,

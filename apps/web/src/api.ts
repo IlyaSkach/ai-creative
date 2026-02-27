@@ -5,7 +5,7 @@ export interface ChannelInfo {
   description: string;
   username: string;
   channelLink: string;
-  posts: Array<{ date: string; text: string; photoBase64?: string; mediaType?: string; views?: number; reactionsCount?: number }>;
+  posts: Array<{ postId?: number; date: string; text: string; photoBase64?: string; mediaType?: string; views?: number; reactionsCount?: number }>;
   directPostMode?: boolean;
   sourcePostLink?: string;
 }
@@ -50,14 +50,25 @@ export async function generateCreative(
   channelInfo: ChannelInfo,
   withImage: boolean,
   selectedTopic?: string,
-  forcedSourcePostIndex?: number
-): Promise<{ text: string; imageBase64: string | null; imagePrompt: string | null; imageError?: string | null; sourcePostIndex?: number | null }> {
+  forcedSourcePostIndex?: number,
+  imageMode?: "none" | "generated" | "from_post" | "hybrid",
+  sourceImageBase64?: string | null,
+  sourceImageMediaType?: string | null
+): Promise<{ text: string; imageBase64: string | null; imageMediaType?: string | null; imagePrompt: string | null; imageError?: string | null; sourcePostIndex?: number | null }> {
   const res = await fetch(`${API}/creative/generate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ channelInfo, withImage, selectedTopic, forcedSourcePostIndex }),
+    body: JSON.stringify({
+      channelInfo,
+      withImage,
+      selectedTopic,
+      forcedSourcePostIndex,
+      imageMode,
+      sourceImageBase64: sourceImageBase64 || undefined,
+      sourceImageMediaType: sourceImageMediaType || undefined,
+    }),
   });
-  return parseApiResponse<{ text: string; imageBase64: string | null; imagePrompt: string | null; imageError?: string | null; sourcePostIndex?: number | null }>(
+  return parseApiResponse<{ text: string; imageBase64: string | null; imageMediaType?: string | null; imagePrompt: string | null; imageError?: string | null; sourcePostIndex?: number | null }>(
     res,
     "Ошибка генерации"
   );

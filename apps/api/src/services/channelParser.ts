@@ -49,6 +49,7 @@ function parseTmePage(html: string): { title: string; description: string } {
 }
 
 export interface ChannelPost {
+  postId?: number;
   date: string;
   text: string;
   photoBase64?: string;
@@ -134,9 +135,8 @@ export async function parseChannelFromTme(linkOrUsername: string): Promise<Chann
   };
 }
 
-const MAX_POSTS_WITH_PHOTOS = 5;
-
 const LAST_POSTS_LIMIT = 30;
+const MAX_POSTS_WITH_PHOTOS = LAST_POSTS_LIMIT;
 
 function getReactionsCount(msg: { reactions?: { results?: Array<{ count?: number }> } }): number {
   const results = msg.reactions?.results;
@@ -177,6 +177,7 @@ async function mapMessageToPost(
   preferAnyMedia = false
 ): Promise<ChannelPost | null> {
   const msg = m as {
+    id?: number;
     date?: number;
     message?: string;
     text?: string;
@@ -210,6 +211,7 @@ async function mapMessageToPost(
   const hasAnyMedia = Boolean(msg.media);
   if (!(text || photoBase64 || hasAnyMedia)) return null;
   return {
+    postId: typeof msg.id === "number" ? msg.id : undefined,
     date: date.toISOString(),
     text: text || "(пост без текста)",
     photoBase64,

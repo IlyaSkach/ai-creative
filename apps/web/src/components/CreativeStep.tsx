@@ -2,13 +2,14 @@ import { useEffect, useState } from "react";
 import type { ChannelInfo } from "../api";
 import { analyzeChannelTopics, generateCreative } from "../api";
 
-export type ImageMode = "none" | "generated" | "from_post";
+export type ImageMode = "none" | "generated" | "from_post" | "hybrid";
 export type GenerationMode = "single" | "per_topic";
 
 export interface DraftCreative {
   topicLabel: string;
   topicPrompt?: string;
   selectedTopics: string[];
+  attachSourcePostLink: boolean;
   imageMode: ImageMode;
   text: string;
   imageBase64: string | null;
@@ -79,9 +80,26 @@ function pickMediaByTopic(
   return null;
 }
 
+function resolveSourcePostLink(channelInfo: ChannelInfo, sourcePostIndex?: number | null): string | null {
+  if (sourcePostIndex && sourcePostIndex >= 1 && sourcePostIndex <= channelInfo.posts.length) {
+    const post = channelInfo.posts[sourcePostIndex - 1];
+    if (post?.postId) return `https://t.me/${channelInfo.username}/${post.postId}`;
+  }
+  if (channelInfo.directPostMode && channelInfo.sourcePostLink) return channelInfo.sourcePostLink;
+  return null;
+}
+
+function appendSourcePostLink(text: string, link: string | null): string {
+  if (!link) return text;
+  const cleaned = text.trim();
+  if (cleaned.includes(link)) return cleaned;
+  return `${cleaned}\n\nПост-источник: ${link}`;
+}
+
 export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
   const [imageMode, setImageMode] = useState<ImageMode>("generated");
   const [generationMode, setGenerationMode] = useState<GenerationMode>("single");
+  const [attachSourcePostLink, setAttachSourcePostLink] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [topicsLoading, setTopicsLoading] = useState(false);
@@ -130,48 +148,78 @@ export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
   };
 
   const buildCreative = async (topicPrompt: string | undefined, topicLabel: string, allSelected: string[]): Promise<DraftCreative> => {
-    const withImage = imageMode === "generated";
-    const result = await generateCreative(channelInfo, withImage, topicPrompt);
+    const withImage = imageMode === "generated" || imageMode === "hybrid";
+    const preferredMedia = pickMediaByTopic(channelInfo, topicPrompt);
+    const result = await generateCreative(
+      channelInfo,
+      withImage,
+      topicPrompt,
+      preferredMedia?.index,
+      imageMode,
+      imageMode === "hybrid" ? (preferredMedia?.base64 || null) : null,
+      imageMode === "hybrid" ? (preferredMedia?.mediaType || null) : null
+    );
+
+    let draft: DraftCreative;
 
     if (imageMode === "generated") {
-      return {
+      draft = {
         topicLabel,
         topicPrompt,
         selectedTopics: allSelected,
+        attachSourcePostLink,
         imageMode,
         text: result.text,
         imageBase64: result.imageBase64,
-        imageMediaType: result.imageBase64 ? "image/png" : null,
+        imageMediaType: result.imageMediaType || (result.imageBase64 ? "image/png" : null),
         sourcePostIndex: result.sourcePostIndex ?? null,
       };
-    }
-
-    if (imageMode === "from_post") {
-      const mediaBySource = pickMediaBySourcePostIndex(channelInfo, result.sourcePostIndex ?? null);
-      const mediaByTopic = pickMediaByTopic(channelInfo, topicPrompt);
-      const media = mediaBySource || mediaByTopic;
-      return {
+    } else if (imageMode === "hybrid") {
+      draft = {
         topicLabel,
         topicPrompt,
         selectedTopics: allSelected,
+        attachSourcePostLink,
+        imageMode,
+        text: result.text,
+        imageBase64: result.imageBase64,
+        imageMediaType: result.imageMediaType || (result.imageBase64 ? "image/png" : null),
+        sourcePostIndex: result.sourcePostIndex ?? preferredMedia?.index ?? null,
+      };
+    } else if (imageMode === "from_post") {
+      const mediaBySource = pickMediaBySourcePostIndex(channelInfo, result.sourcePostIndex ?? null);
+      const mediaByTopic = preferredMedia;
+      const media = mediaBySource || mediaByTopic;
+      draft = {
+        topicLabel,
+        topicPrompt,
+        selectedTopics: allSelected,
+        attachSourcePostLink,
         imageMode,
         text: result.text,
         imageBase64: media?.base64 || null,
         imageMediaType: media?.mediaType || null,
         sourcePostIndex: media?.index ?? result.sourcePostIndex ?? null,
       };
+    } else {
+      draft = {
+        topicLabel,
+        topicPrompt,
+        selectedTopics: allSelected,
+        attachSourcePostLink,
+        imageMode,
+        text: result.text,
+        imageBase64: null,
+        imageMediaType: null,
+        sourcePostIndex: result.sourcePostIndex ?? null,
+      };
     }
 
-    return {
-      topicLabel,
-      topicPrompt,
-      selectedTopics: allSelected,
-      imageMode,
-      text: result.text,
-      imageBase64: null,
-      imageMediaType: null,
-      sourcePostIndex: result.sourcePostIndex ?? null,
-    };
+    if (attachSourcePostLink) {
+      const sourceLink = resolveSourcePostLink(channelInfo, draft.sourcePostIndex);
+      draft = { ...draft, text: appendSourcePostLink(draft.text, sourceLink) };
+    }
+    return draft;
   };
 
   const handleGenerate = async () => {
@@ -191,7 +239,7 @@ export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
         }
       }
 
-      if (imageMode === "from_post" && nextGenerated.some((x) => !x.imageBase64)) {
+      if ((imageMode === "from_post" || imageMode === "hybrid") && nextGenerated.some((x) => !x.imageBase64)) {
         setError("Для части тем не нашлась картинка/гиф в постах. Выбери темы точнее или режим «С картинкой (ИИ)».");
       }
       setGenerated(nextGenerated);
@@ -318,12 +366,36 @@ export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
                 <input
                   type="radio"
                   name="format"
+                  checked={imageMode === "hybrid"}
+                  onChange={() => setImageMode("hybrid")}
+                  disabled={!hasPostMedia}
+                />
+                <span>
+                  Гибрид: картинка из поста + ИИ-перерисовка
+                  {!hasPostMedia && channelInfo.posts.length > 0 && " (в постах нет фото/гиф)"}
+                </span>
+              </label>
+              <label style={{ display: "flex", alignItems: "flex-start", gap: "0.55rem", cursor: "pointer" }}>
+                <input
+                  type="radio"
+                  name="format"
                   checked={imageMode === "none"}
                   onChange={() => setImageMode("none")}
                 />
                 <span>Только текст</span>
               </label>
             </div>
+          </div>
+          <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "0.85rem" }}>
+            <p className="label" style={{ marginBottom: "0.45rem" }}>Дополнительно</p>
+            <label style={{ display: "flex", alignItems: "flex-start", gap: "0.55rem", cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={attachSourcePostLink}
+                onChange={(e) => setAttachSourcePostLink(e.target.checked)}
+              />
+              <span>Добавлять в конец креатива ссылку на пост-источник</span>
+            </label>
           </div>
         </div>
         <div className="flex">
@@ -361,7 +433,18 @@ export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
                     )}
                   </div>
                 )}
-                <textarea readOnly value={item.text} style={{ minHeight: 100 }} />
+                <div
+                  style={{
+                    whiteSpace: "pre-wrap",
+                    border: "1px solid var(--border)",
+                    borderRadius: "var(--radius)",
+                    padding: "0.7rem 0.8rem",
+                    background: "var(--card)",
+                    lineHeight: 1.45,
+                  }}
+                >
+                  {item.text}
+                </div>
               </div>
             ))}
           </div>
