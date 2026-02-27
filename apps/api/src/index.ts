@@ -28,7 +28,7 @@ const port = Number(process.env.API_PORT) || 3001;
 const webOrigin = process.env.WEB_ORIGIN || "http://localhost:5173";
 
 app.use(cors({ origin: webOrigin, credentials: true }));
-app.use(express.json({ limit: "10mb" }));
+app.use(express.json({ limit: "30mb" }));
 
 app.use("/api/channel", channelRouter);
 app.use("/api/creative", creativeRouter);

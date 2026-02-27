@@ -16,6 +16,16 @@ export interface ChannelTopics {
   bestThemesInsight?: string;
 }
 
+function stripHeavyMedia(channelInfo: ChannelInfo): ChannelInfo {
+  return {
+    ...channelInfo,
+    posts: (channelInfo.posts || []).map((p) => ({
+      ...p,
+      photoBase64: undefined,
+    })),
+  };
+}
+
 async function parseApiResponse<T>(res: Response, fallbackError: string): Promise<T> {
   const raw = await res.text();
   let data: unknown = null;
@@ -55,11 +65,12 @@ export async function generateCreative(
   sourceImageBase64?: string | null,
   sourceImageMediaType?: string | null
 ): Promise<{ text: string; imageBase64: string | null; imageMediaType?: string | null; imagePrompt: string | null; imageError?: string | null; sourcePostIndex?: number | null }> {
+  const lightChannelInfo = stripHeavyMedia(channelInfo);
   const res = await fetch(`${API}/creative/generate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      channelInfo,
+      channelInfo: lightChannelInfo,
       withImage,
       selectedTopic,
       forcedSourcePostIndex,
@@ -75,10 +86,11 @@ export async function generateCreative(
 }
 
 export async function analyzeChannelTopics(channelInfo: ChannelInfo): Promise<ChannelTopics> {
+  const lightChannelInfo = stripHeavyMedia(channelInfo);
   const res = await fetch(`${API}/creative/themes`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ channelInfo }),
+    body: JSON.stringify({ channelInfo: lightChannelInfo }),
   });
   return parseApiResponse<ChannelTopics>(res, "Ошибка анализа тем");
 }
