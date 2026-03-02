@@ -1,13 +1,15 @@
 import { useEffect, useState } from "react";
 import type { ChannelInfo } from "../api";
+import type { CreativeStyle } from "../api";
 import { analyzeChannelTopics, generateCreative } from "../api";
 
-export type ImageMode = "none" | "generated" | "from_post" | "hybrid";
+export type ImageMode = "none" | "generated" | "from_post";
 export type GenerationMode = "single" | "per_topic";
 
 export interface DraftCreative {
   topicLabel: string;
   topicPrompt?: string;
+  style: CreativeStyle;
   selectedTopics: string[];
   attachSourcePostLink: boolean;
   imageMode: ImageMode;
@@ -97,7 +99,9 @@ function appendSourcePostLink(text: string, link: string | null): string {
 }
 
 export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
+  const isDirectPostMode = Boolean(channelInfo.directPostMode);
   const [imageMode, setImageMode] = useState<ImageMode>("generated");
+  const [style, setStyle] = useState<CreativeStyle>("native");
   const [generationMode, setGenerationMode] = useState<GenerationMode>("single");
   const [attachSourcePostLink, setAttachSourcePostLink] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -116,6 +120,15 @@ export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
   useEffect(() => {
     let cancelled = false;
     const run = async () => {
+      if (isDirectPostMode) {
+        setTopics([]);
+        setSelectedTopics(["Пост по ссылке"]);
+        setTopicSummary("");
+        setBestThemesInsight("");
+        setTopicsError("");
+        setTopicsLoading(false);
+        return;
+      }
       setTopicsLoading(true);
       setTopicsError("");
       try {
@@ -139,7 +152,7 @@ export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
     return () => {
       cancelled = true;
     };
-  }, [channelInfo]);
+  }, [channelInfo, isDirectPostMode]);
 
   const toggleTopic = (topic: string) => {
     setSelectedTopics((prev) =>
@@ -148,16 +161,18 @@ export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
   };
 
   const buildCreative = async (topicPrompt: string | undefined, topicLabel: string, allSelected: string[]): Promise<DraftCreative> => {
-    const withImage = imageMode === "generated" || imageMode === "hybrid";
-    const preferredMedia = pickMediaByTopic(channelInfo, topicPrompt);
+    const withImage = imageMode === "generated";
+    const forcedSourcePostIndex = isDirectPostMode ? 1 : undefined;
+    const preferredMedia = isDirectPostMode
+      ? pickMediaBySourcePostIndex(channelInfo, 1)
+      : pickMediaByTopic(channelInfo, topicPrompt);
     const result = await generateCreative(
       channelInfo,
       withImage,
       topicPrompt,
-      preferredMedia?.index,
+      forcedSourcePostIndex ?? preferredMedia?.index,
       imageMode,
-      imageMode === "hybrid" ? (preferredMedia?.base64 || null) : null,
-      imageMode === "hybrid" ? (preferredMedia?.mediaType || null) : null
+      style
     );
 
     let draft: DraftCreative;
@@ -166,6 +181,7 @@ export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
       draft = {
         topicLabel,
         topicPrompt,
+        style,
         selectedTopics: allSelected,
         attachSourcePostLink,
         imageMode,
@@ -174,25 +190,17 @@ export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
         imageMediaType: result.imageMediaType || (result.imageBase64 ? "image/png" : null),
         sourcePostIndex: result.sourcePostIndex ?? null,
       };
-    } else if (imageMode === "hybrid") {
-      draft = {
-        topicLabel,
-        topicPrompt,
-        selectedTopics: allSelected,
-        attachSourcePostLink,
-        imageMode,
-        text: result.text,
-        imageBase64: result.imageBase64,
-        imageMediaType: result.imageMediaType || (result.imageBase64 ? "image/png" : null),
-        sourcePostIndex: result.sourcePostIndex ?? preferredMedia?.index ?? null,
-      };
     } else if (imageMode === "from_post") {
-      const mediaBySource = pickMediaBySourcePostIndex(channelInfo, result.sourcePostIndex ?? null);
+      const mediaBySource = pickMediaBySourcePostIndex(
+        channelInfo,
+        result.sourcePostIndex ?? forcedSourcePostIndex ?? null
+      );
       const mediaByTopic = preferredMedia;
       const media = mediaBySource || mediaByTopic;
       draft = {
         topicLabel,
         topicPrompt,
+        style,
         selectedTopics: allSelected,
         attachSourcePostLink,
         imageMode,
@@ -205,6 +213,7 @@ export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
       draft = {
         topicLabel,
         topicPrompt,
+        style,
         selectedTopics: allSelected,
         attachSourcePostLink,
         imageMode,
@@ -226,6 +235,15 @@ export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
     setError("");
     setLoading(true);
     try {
+      if (isDirectPostMode) {
+        const directSelected = ["Пост по ссылке"];
+        const directCreative = await buildCreative(undefined, "Креатив по выбранному посту", directSelected);
+        if (imageMode === "from_post" && !directCreative.imageBase64) {
+          setError("В выбранном посте нет медиа. Выбери режим «С картинкой (ИИ)» или «Только текст».");
+        }
+        setGenerated([directCreative]);
+        return;
+      }
       const selected = selectedTopics.length > 0 ? selectedTopics : (topics.length > 0 ? [topics[0]] : ["Общая тема канала"]);
       let nextGenerated: DraftCreative[] = [];
 
@@ -239,8 +257,8 @@ export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
         }
       }
 
-      if ((imageMode === "from_post" || imageMode === "hybrid") && nextGenerated.some((x) => !x.imageBase64)) {
-        setError("Для части тем не нашлась картинка/гиф в постах. Выбери темы точнее или режим «С картинкой (ИИ)».");
+      if (imageMode === "from_post" && nextGenerated.some((x) => !x.imageBase64)) {
+        setError("Для части тем не нашлось медиа в постах. Выбери темы точнее или режим «С картинкой (ИИ)».");
       }
       setGenerated(nextGenerated);
     } catch (e) {
@@ -267,12 +285,17 @@ export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
           )}
         </p>
         <p style={{ margin: "0.5rem 0 0", fontSize: "0.85rem" }}>
-          <a href={channelInfo.channelLink} target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>
-            {channelInfo.channelLink}
+          <a
+            href={channelInfo.directPostMode && channelInfo.sourcePostLink ? channelInfo.sourcePostLink : channelInfo.channelLink}
+            target="_blank"
+            rel="noreferrer"
+            style={{ color: "var(--accent)" }}
+          >
+            {channelInfo.directPostMode && channelInfo.sourcePostLink ? channelInfo.sourcePostLink : channelInfo.channelLink}
           </a>
           {" · "}
           Последних постов: {channelInfo.posts.length}
-          {postMediaCount > 0 && `, с картинкой/гиф: ${postMediaCount}`}
+          {postMediaCount > 0 && `, с медиа (картинка/гиф/видео): ${postMediaCount}`}
           {channelInfo.posts.length > 0 && " · креатив по постам с макс. охватом (просмотры + реакции)"}
         </p>
       </section>
@@ -280,59 +303,105 @@ export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
       <section className="card">
         <h2>Креатив</h2>
         <div style={{ display: "grid", gap: "0.9rem" }}>
-          <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "0.85rem" }}>
-            <p className="label" style={{ marginBottom: "0.45rem" }}>Темы канала (мультивыбор)</p>
-            {topicsLoading ? (
-              <p style={{ color: "var(--muted)", margin: 0 }}>Анализирую темы постов…</p>
-            ) : (
-              <>
-                {topicsError && <p className="error">{topicsError}</p>}
-                {topicSummary && (
-                  <p style={{ color: "var(--muted)", marginTop: 0, marginBottom: "0.65rem" }}>{topicSummary}</p>
-                )}
-                {bestThemesInsight && (
-                  <p style={{ color: "var(--accent)", marginTop: 0, marginBottom: "0.75rem" }}>
-                    Аналитика: {bestThemesInsight}
-                  </p>
-                )}
-                {topics.length > 0 && (
-                  <div style={{ display: "grid", gap: "0.45rem" }}>
-                    {topics.map((topic) => (
-                      <label key={topic} style={{ display: "flex", alignItems: "flex-start", gap: "0.55rem", cursor: "pointer" }}>
-                        <input
-                          type="checkbox"
-                          checked={selectedTopics.includes(topic)}
-                          onChange={() => toggleTopic(topic)}
-                        />
-                        <span>{topic}</span>
-                      </label>
-                    ))}
-                  </div>
-                )}
-              </>
-            )}
-          </div>
+          {!isDirectPostMode && (
+            <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "0.85rem" }}>
+              <p className="label" style={{ marginBottom: "0.45rem" }}>Темы канала (мультивыбор)</p>
+              {topicsLoading ? (
+                <p style={{ color: "var(--muted)", margin: 0 }}>Анализирую темы постов…</p>
+              ) : (
+                <>
+                  {topicsError && <p className="error">{topicsError}</p>}
+                  {topicSummary && (
+                    <p style={{ color: "var(--muted)", marginTop: 0, marginBottom: "0.65rem" }}>{topicSummary}</p>
+                  )}
+                  {bestThemesInsight && (
+                    <p style={{ color: "var(--accent)", marginTop: 0, marginBottom: "0.75rem" }}>
+                      Аналитика: {bestThemesInsight}
+                    </p>
+                  )}
+                  {topics.length > 0 && (
+                    <div style={{ display: "grid", gap: "0.45rem" }}>
+                      {topics.map((topic) => (
+                        <label key={topic} style={{ display: "flex", alignItems: "flex-start", gap: "0.55rem", cursor: "pointer" }}>
+                          <input
+                            type="checkbox"
+                            checked={selectedTopics.includes(topic)}
+                            onChange={() => toggleTopic(topic)}
+                          />
+                          <span>{topic}</span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
+          {!isDirectPostMode && (
+            <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "0.85rem" }}>
+              <p className="label" style={{ marginBottom: "0.45rem" }}>Как генерировать</p>
+              <div style={{ display: "grid", gap: "0.5rem" }}>
+                <label style={{ display: "flex", alignItems: "flex-start", gap: "0.55rem", cursor: "pointer" }}>
+                  <input
+                    type="radio"
+                    name="gen-mode"
+                    checked={generationMode === "single"}
+                    onChange={() => setGenerationMode("single")}
+                  />
+                  <span>Один креатив по всем выбранным темам</span>
+                </label>
+                <label style={{ display: "flex", alignItems: "flex-start", gap: "0.55rem", cursor: "pointer" }}>
+                  <input
+                    type="radio"
+                    name="gen-mode"
+                    checked={generationMode === "per_topic"}
+                    onChange={() => setGenerationMode("per_topic")}
+                  />
+                  <span>Отдельный креатив по каждой выбранной теме</span>
+                </label>
+              </div>
+            </div>
+          )}
 
           <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "0.85rem" }}>
-            <p className="label" style={{ marginBottom: "0.45rem" }}>Как генерировать</p>
+            <p className="label" style={{ marginBottom: "0.45rem" }}>Стиль креатива</p>
             <div style={{ display: "grid", gap: "0.5rem" }}>
               <label style={{ display: "flex", alignItems: "flex-start", gap: "0.55rem", cursor: "pointer" }}>
                 <input
                   type="radio"
-                  name="gen-mode"
-                  checked={generationMode === "single"}
-                  onChange={() => setGenerationMode("single")}
+                  name="creative-style"
+                  checked={style === "native"}
+                  onChange={() => setStyle("native")}
                 />
-                <span>Один креатив по всем выбранным темам</span>
+                <span>Нативный — аккуратная рекламная интеграция в полезный контент</span>
               </label>
               <label style={{ display: "flex", alignItems: "flex-start", gap: "0.55rem", cursor: "pointer" }}>
                 <input
                   type="radio"
-                  name="gen-mode"
-                  checked={generationMode === "per_topic"}
-                  onChange={() => setGenerationMode("per_topic")}
+                  name="creative-style"
+                  checked={style === "history"}
+                  onChange={() => setStyle("history")}
                 />
-                <span>Отдельный креатив по каждой выбранной теме</span>
+                <span>История — креатив через небольшой рассказ/ситуацию</span>
+              </label>
+              <label style={{ display: "flex", alignItems: "flex-start", gap: "0.55rem", cursor: "pointer" }}>
+                <input
+                  type="radio"
+                  name="creative-style"
+                  checked={style === "direct"}
+                  onChange={() => setStyle("direct")}
+                />
+                <span>Прямая — коротко и сразу по сути рекламы</span>
+              </label>
+              <label style={{ display: "flex", alignItems: "flex-start", gap: "0.55rem", cursor: "pointer" }}>
+                <input
+                  type="radio"
+                  name="creative-style"
+                  checked={style === "humor"}
+                  onChange={() => setStyle("humor")}
+                />
+                <span>Юмористический — легкий уместный юмор по теме</span>
               </label>
             </div>
           </div>
@@ -358,21 +427,8 @@ export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
                   disabled={!hasPostMedia}
                 />
                 <span>
-                  С картинкой/гиф с поста
-                  {!hasPostMedia && channelInfo.posts.length > 0 && " (в постах нет фото/гиф)"}
-                </span>
-              </label>
-              <label style={{ display: "flex", alignItems: "flex-start", gap: "0.55rem", cursor: "pointer" }}>
-                <input
-                  type="radio"
-                  name="format"
-                  checked={imageMode === "hybrid"}
-                  onChange={() => setImageMode("hybrid")}
-                  disabled={!hasPostMedia}
-                />
-                <span>
-                  Гибрид: картинка из поста + ИИ-перерисовка
-                  {!hasPostMedia && channelInfo.posts.length > 0 && " (в постах нет фото/гиф)"}
+                  С медиа с поста (картинка/гиф/видео)
+                  {!hasPostMedia && channelInfo.posts.length > 0 && " (в постах нет медиа)"}
                 </span>
               </label>
               <label style={{ display: "flex", alignItems: "flex-start", gap: "0.55rem", cursor: "pointer" }}>
@@ -399,7 +455,7 @@ export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
           </div>
         </div>
         <div className="flex">
-          <button onClick={handleGenerate} disabled={loading || topicsLoading || selectedTopics.length === 0}>
+          <button onClick={handleGenerate} disabled={loading || topicsLoading || (!isDirectPostMode && selectedTopics.length === 0)}>
             {loading ? "Генерирую…" : "Сгенерировать креатив"}
           </button>
         </div>

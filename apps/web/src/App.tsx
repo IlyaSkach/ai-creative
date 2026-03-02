@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { ChannelInfo } from "./api";
-import { editCreativeWithAi, generateCreative, sendToTelegram } from "./api";
+import { editCreativeImageWithAi, editCreativeWithAi, generateCreative, sendToTelegram } from "./api";
 import { ChannelStep } from "./components/ChannelStep";
 import { CreativeStep, type DraftCreative } from "./components/CreativeStep";
 import { SendStep } from "./components/SendStep";
@@ -62,40 +62,10 @@ export default function App() {
   const [channelInfo, setChannelInfo] = useState<ChannelInfo | null>(null);
   const [creatives, setCreatives] = useState<DraftCreative[]>([]);
   const [activeCreativeIndex, setActiveCreativeIndex] = useState(0);
-  const [autoGenerating, setAutoGenerating] = useState(false);
-  const [autoGenerateError, setAutoGenerateError] = useState("");
 
   const onChannelDone = async (info: ChannelInfo) => {
     setChannelInfo(info);
-    if (!info.directPostMode) {
-      setStep("creative");
-      return;
-    }
-    setAutoGenerateError("");
-    setAutoGenerating(true);
-    try {
-      // Режим ссылки на пост: сразу генерируем текст по этому посту
-      const generated = await generateCreative(info, false, undefined, 1);
-      const mediaFromPost = info.posts.find((p) => p.photoBase64);
-      setCreatives([{
-        topicLabel: "Креатив по выбранному посту",
-        topicPrompt: undefined,
-        selectedTopics: [],
-        attachSourcePostLink: false,
-        imageMode: mediaFromPost ? "from_post" : "none",
-        text: generated.text,
-        imageBase64: mediaFromPost?.photoBase64 || null,
-        imageMediaType: mediaFromPost?.mediaType || (mediaFromPost ? "image/jpeg" : null),
-        sourcePostIndex: generated.sourcePostIndex ?? 1,
-      }]);
-      setActiveCreativeIndex(0);
-      setStep("send");
-    } catch (e) {
-      setAutoGenerateError(e instanceof Error ? e.message : "Ошибка генерации креатива");
-      setStep("creative");
-    } finally {
-      setAutoGenerating(false);
-    }
+    setStep("creative");
   };
 
   const onCreativeDone = (nextCreatives: DraftCreative[]) => {
@@ -118,26 +88,10 @@ export default function App() {
       )}
 
       {step === "creative" && channelInfo && (
-        <>
-          {autoGenerating && (
-            <section className="card">
-              <h2>Подготовка креатива</h2>
-              <p style={{ color: "var(--muted)", margin: 0 }}>
-                Обнаружена ссылка на пост. Генерирую креатив сразу по этому посту и перенаправляю в редактирование…
-              </p>
-            </section>
-          )}
-          {autoGenerateError && (
-            <section className="card">
-              <h2>Ошибка авто-режима</h2>
-              <p className="error" style={{ margin: 0 }}>{autoGenerateError}</p>
-            </section>
-          )}
-          <CreativeStep
-            channelInfo={channelInfo}
-            onDone={onCreativeDone}
-          />
-        </>
+        <CreativeStep
+          channelInfo={channelInfo}
+          onDone={onCreativeDone}
+        />
       )}
 
       {step === "send" && (
@@ -162,23 +116,18 @@ export default function App() {
             if (!channelInfo || !currentCreative) return;
             const topicPrompt = currentCreative.topicPrompt;
             const nextForcedIndex = getNextSourcePostIndex(channelInfo, topicPrompt, currentCreative.sourcePostIndex);
-            const withImage = currentCreative.imageMode === "generated" || currentCreative.imageMode === "hybrid";
-            const sourcePost = nextForcedIndex ? channelInfo.posts[nextForcedIndex - 1] : undefined;
+            const withImage = currentCreative.imageMode === "generated";
             const regenerated = await generateCreative(
               channelInfo,
               withImage,
               topicPrompt,
               nextForcedIndex,
               currentCreative.imageMode,
-              currentCreative.imageMode === "hybrid" ? (sourcePost?.photoBase64 || null) : null,
-              currentCreative.imageMode === "hybrid" ? (sourcePost?.mediaType || null) : null
+              currentCreative.style
             );
             let nextImageBase64: string | null = null;
             let nextImageMediaType: string | null = null;
             if (currentCreative.imageMode === "generated") {
-              nextImageBase64 = regenerated.imageBase64;
-              nextImageMediaType = regenerated.imageMediaType || (regenerated.imageBase64 ? "image/png" : null);
-            } else if (currentCreative.imageMode === "hybrid") {
               nextImageBase64 = regenerated.imageBase64;
               nextImageMediaType = regenerated.imageMediaType || (regenerated.imageBase64 ? "image/png" : null);
             } else if (currentCreative.imageMode === "from_post") {
@@ -202,6 +151,21 @@ export default function App() {
           }}
           onSend={async (to, text, imageBase64, imageMediaType) => {
             await sendToTelegram(to, text, imageBase64, imageMediaType);
+          }}
+          onEditImage={async (instruction, currentText) => {
+            if (!currentCreative?.imageBase64) throw new Error("Нет изображения для редактирования");
+            const edited = await editCreativeImageWithAi(
+              currentCreative.imageBase64,
+              instruction,
+              currentCreative.imageMediaType,
+              currentCreative.imageMode,
+              currentText || currentCreative.text
+            );
+            setCreatives((prev) => prev.map((c, i) => (
+              i === activeCreativeIndex
+                ? { ...c, imageBase64: edited.imageBase64, imageMediaType: edited.imageMediaType }
+                : c
+            )));
           }}
         />
       )}

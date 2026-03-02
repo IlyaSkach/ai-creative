@@ -136,7 +136,9 @@ export async function parseChannelFromTme(linkOrUsername: string): Promise<Chann
 }
 
 const LAST_POSTS_LIMIT = 30;
-const MAX_POSTS_WITH_PHOTOS = LAST_POSTS_LIMIT;
+const MAX_POSTS_WITH_MEDIA = LAST_POSTS_LIMIT;
+const MEDIA_DOWNLOAD_TIMEOUT_MS = Number(process.env.TELEGRAM_MEDIA_DOWNLOAD_TIMEOUT_MS || 12000);
+const MAX_MEDIA_BYTES = Number(process.env.TELEGRAM_MAX_MEDIA_BYTES || 8 * 1024 * 1024);
 
 function getReactionsCount(msg: { reactions?: { results?: Array<{ count?: number }> } }): number {
   const results = msg.reactions?.results;
@@ -155,6 +157,9 @@ function buildTelegramClientOptions() {
     useWSS: false,
     timeout: 60,
     requestRetries: 3,
+    // Нам не нужен фоновой цикл updates: мы только читаем историю канала.
+    // Это убирает регулярный шум вида Error: TIMEOUT из updates.js.
+    receiveUpdates: false,
   };
   if (proxyHost && proxyPort > 0) {
     clientOptions.proxy = {
@@ -170,6 +175,17 @@ function buildTelegramClientOptions() {
   return clientOptions;
 }
 
+async function shutdownTelegramClient(client: { disconnect: () => Promise<void>; destroy?: () => Promise<void> }): Promise<void> {
+  try {
+    await client.disconnect();
+  } catch {}
+  try {
+    if (typeof client.destroy === "function") {
+      await client.destroy();
+    }
+  } catch {}
+}
+
 async function mapMessageToPost(
   client: any,
   m: unknown,
@@ -183,7 +199,7 @@ async function mapMessageToPost(
     text?: string;
     views?: number;
     reactions?: { results?: Array<{ count?: number }> };
-    media?: { className?: string; photo?: unknown; document?: { mimeType?: string; mime_type?: string } };
+    media?: { className?: string; photo?: unknown; document?: { mimeType?: string; mime_type?: string; size?: number } };
   };
   const date = msg.date ? new Date(msg.date * 1000) : new Date();
   const text = (msg.message ?? msg.text ?? "").trim();
@@ -194,11 +210,20 @@ async function mapMessageToPost(
   const isPhoto = msg.media && (String(msg.media.className) === "MessageMediaPhoto" || msg.media.photo);
   const doc = msg.media?.className === "MessageMediaDocument" ? msg.media.document : null;
   const mime = doc && (doc.mimeType || doc.mime_type);
+  const docSize = doc && typeof doc.size === "number" ? doc.size : undefined;
+  const isTooLargeDoc = typeof docSize === "number" && docSize > MAX_MEDIA_BYTES;
   const isImageDoc = mime && /^image\/(gif|jpeg|jpg|png|webp)$/i.test(mime);
-  const hasMedia = mediaDownloadedRef.value < MAX_POSTS_WITH_PHOTOS && (isPhoto || isImageDoc || (preferAnyMedia && Boolean(msg.media)));
+  const isVideoDoc = mime && /^video\//i.test(mime);
+  const hasMedia =
+    mediaDownloadedRef.value < MAX_POSTS_WITH_MEDIA &&
+    !isTooLargeDoc &&
+    (isPhoto || isImageDoc || isVideoDoc || (preferAnyMedia && Boolean(msg.media)));
   if (hasMedia) {
     try {
-      const buf = await client.downloadMedia(m as never, {});
+      const buf = await Promise.race([
+        client.downloadMedia(m as never, {}),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), MEDIA_DOWNLOAD_TIMEOUT_MS)),
+      ]);
       if (buf && Buffer.isBuffer(buf)) {
         photoBase64 = buf.toString("base64");
         mediaType = isPhoto ? "image/jpeg" : (mime || "image/png");
@@ -240,6 +265,10 @@ async function fetchPostsIfAvailable(username: string): Promise<ChannelPost[]> {
       apiHash,
       clientOptions
     );
+    try {
+      // Скрываем шум gramjs (INFO/WARN + TIMEOUT из update loop).
+      client.setLogLevel("none" as any);
+    } catch {}
     await client.connect();
     const entity = await client.getEntity(username.startsWith("@") ? username : `@${username}`);
     const posts: ChannelPost[] = [];
@@ -274,7 +303,7 @@ async function fetchPostsIfAvailable(username: string): Promise<ChannelPost[]> {
       const lastMsg = messages[messages.length - 1] as { id?: number };
       offsetId = lastMsg?.id ?? 0;
     }
-    await client.disconnect();
+    await shutdownTelegramClient(client);
     const out = posts.slice(0, LAST_POSTS_LIMIT);
     console.log("[channelParser] Последних постов загружено:", out.length);
     if (firstBatch.length > 0 && out.length === 0) {
@@ -306,6 +335,10 @@ async function fetchSpecificPostIfAvailable(username: string, postId: number): P
       apiHash,
       buildTelegramClientOptions()
     );
+    try {
+      // Скрываем шум gramjs (INFO/WARN + TIMEOUT из update loop).
+      client.setLogLevel("none" as any);
+    } catch {}
     await client.connect();
     const entity = await client.getEntity(username.startsWith("@") ? username : `@${username}`);
     let target: unknown | null = null;
@@ -334,13 +367,13 @@ async function fetchSpecificPostIfAvailable(username: string, postId: number): P
       if (!offsetId || offsetId <= 1) break;
     }
     if (!target) {
-      await client.disconnect();
+      await shutdownTelegramClient(client);
       console.log(`[channelParser] Пост ${postId} не найден в истории @${username}, используем обычный режим постов.`);
       return fetchPostsIfAvailable(username);
     }
     let mediaDownloaded = { value: 0 };
     const post = await mapMessageToPost(client, target, mediaDownloaded, true);
-    await client.disconnect();
+    await shutdownTelegramClient(client);
     return post ? [post] : [];
   } catch (e) {
     console.error("[channelParser] Ошибка загрузки конкретного поста:", e instanceof Error ? e.message : e);

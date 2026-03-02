@@ -1,4 +1,5 @@
 const API = "/api";
+export type CreativeStyle = "native" | "history" | "direct" | "humor";
 
 export interface ChannelInfo {
   title: string;
@@ -61,9 +62,8 @@ export async function generateCreative(
   withImage: boolean,
   selectedTopic?: string,
   forcedSourcePostIndex?: number,
-  imageMode?: "none" | "generated" | "from_post" | "hybrid",
-  sourceImageBase64?: string | null,
-  sourceImageMediaType?: string | null
+  imageMode?: "none" | "generated" | "from_post",
+  style: CreativeStyle = "native"
 ): Promise<{ text: string; imageBase64: string | null; imageMediaType?: string | null; imagePrompt: string | null; imageError?: string | null; sourcePostIndex?: number | null }> {
   const lightChannelInfo = stripHeavyMedia(channelInfo);
   const res = await fetch(`${API}/creative/generate`, {
@@ -75,8 +75,7 @@ export async function generateCreative(
       selectedTopic,
       forcedSourcePostIndex,
       imageMode,
-      sourceImageBase64: sourceImageBase64 || undefined,
-      sourceImageMediaType: sourceImageMediaType || undefined,
+      style,
     }),
   });
   return parseApiResponse<{ text: string; imageBase64: string | null; imageMediaType?: string | null; imagePrompt: string | null; imageError?: string | null; sourcePostIndex?: number | null }>(
@@ -106,6 +105,27 @@ export async function editCreativeWithAi(
   });
   const data = await parseApiResponse<{ text: string }>(res, "Ошибка редактирования");
   return data.text;
+}
+
+export async function editCreativeImageWithAi(
+  imageBase64: string,
+  instruction: string,
+  imageMediaType?: string | null,
+  imageMode?: "none" | "generated" | "from_post",
+  currentText?: string
+): Promise<{ imageBase64: string; imageMediaType: string }> {
+  const res = await fetch(`${API}/creative/edit-image`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      imageBase64,
+      instruction,
+      imageMediaType: imageMediaType || undefined,
+      imageMode: imageMode || undefined,
+      currentText: currentText || undefined,
+    }),
+  });
+  return parseApiResponse<{ imageBase64: string; imageMediaType: string }>(res, "Ошибка редактирования картинки");
 }
 
 export async function sendToTelegram(

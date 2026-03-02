@@ -8,6 +8,7 @@ interface SendStepProps {
   onSelectCreative: (index: number) => void;
   onBack: () => void;
   onEdit: (instruction: string, currentText: string) => Promise<string>;
+  onEditImage: (instruction: string, currentText: string) => Promise<void>;
   onReroll: () => Promise<void>;
   onSend: (to: string, text: string, imageBase64?: string | null, imageMediaType?: string | null) => Promise<void>;
 }
@@ -18,6 +19,7 @@ export function SendStep({
   onSelectCreative,
   onBack,
   onEdit,
+  onEditImage,
   onReroll,
   onSend,
 }: SendStepProps) {
@@ -26,7 +28,9 @@ export function SendStep({
   const [editedText, setEditedText] = useState(current?.text || "");
   useEffect(() => setEditedText(current?.text || ""), [current?.text, activeCreativeIndex]);
   const [aiInstruction, setAiInstruction] = useState("");
+  const [imageInstruction, setImageInstruction] = useState("");
   const [editLoading, setEditLoading] = useState(false);
+  const [editImageLoading, setEditImageLoading] = useState(false);
   const [rerollLoading, setRerollLoading] = useState(false);
   const [to, setTo] = useState("");
   const [sendLoading, setSendLoading] = useState(false);
@@ -131,6 +135,27 @@ export function SendStep({
           </div>
         )}
         <p className="label">Текст креатива (можно править вручную)</p>
+        {current?.imageBase64 && (
+          <div className="mb1">
+            <p className="label">Текущее медиа</p>
+            {(current.imageMediaType || "").toLowerCase().startsWith("video/") ? (
+              <video
+                src={`data:${current.imageMediaType};base64,${current.imageBase64}`}
+                style={{ maxWidth: "100%", borderRadius: "var(--radius)", border: "1px solid var(--border)" }}
+                controls
+                loop
+                muted
+                playsInline
+              />
+            ) : (
+              <img
+                src={`data:${current.imageMediaType || "image/jpeg"};base64,${current.imageBase64}`}
+                alt="Текущее медиа креатива"
+                style={{ maxWidth: "100%", borderRadius: "var(--radius)", border: "1px solid var(--border)" }}
+              />
+            )}
+          </div>
+        )}
         <textarea
           ref={textAreaRef}
           value={editedText}
@@ -170,6 +195,71 @@ export function SendStep({
             {rerollLoading ? "Переделываю…" : "Переделать креатив"}
           </button>
         </div>
+        <p className="label mt1">Промпт для редактирования картинки</p>
+        {current?.imageMode === "generated" && (
+          <p style={{ color: "var(--muted)", fontSize: "0.85rem", margin: "0 0 0.5rem" }}>
+            Для ИИ-картинок применяется полная перерисовка кадра по промпту (не элемент в угол).
+          </p>
+        )}
+        <div className="flex" style={{ gap: "0.5rem", alignItems: "stretch" }}>
+          <input
+            type="text"
+            placeholder="Например: добавь яркий CTA-элемент и акцент на скидке"
+            value={imageInstruction}
+            onChange={(e) => setImageInstruction(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), (async () => {
+              if (!imageInstruction.trim()) return;
+              if (!current?.imageBase64) return;
+              if ((current.imageMediaType || "").toLowerCase().startsWith("video/")) return;
+              setError("");
+              setEditImageLoading(true);
+              try {
+                await onEditImage(imageInstruction.trim(), editedText);
+                setImageInstruction("");
+              } catch (err) {
+                setError(err instanceof Error ? err.message : "Ошибка редактирования картинки");
+              } finally {
+                setEditImageLoading(false);
+              }
+            })())}
+            disabled={editImageLoading || !current?.imageBase64 || (current.imageMediaType || "").toLowerCase().startsWith("video/")}
+          />
+          <button
+            onClick={async () => {
+              if (!imageInstruction.trim()) return;
+              if (!current?.imageBase64) return;
+              if ((current.imageMediaType || "").toLowerCase().startsWith("video/")) return;
+              setError("");
+              setEditImageLoading(true);
+              try {
+                await onEditImage(imageInstruction.trim(), editedText);
+                setImageInstruction("");
+              } catch (err) {
+                setError(err instanceof Error ? err.message : "Ошибка редактирования картинки");
+              } finally {
+                setEditImageLoading(false);
+              }
+            }}
+            disabled={
+              editImageLoading ||
+              !imageInstruction.trim() ||
+              !current?.imageBase64 ||
+              (current.imageMediaType || "").toLowerCase().startsWith("video/")
+            }
+          >
+            {editImageLoading ? "Обновляю…" : "Применить к картинке"}
+          </button>
+        </div>
+        {current?.imageBase64 && (current.imageMediaType || "").toLowerCase().startsWith("video/") && (
+          <p style={{ color: "var(--muted)", fontSize: "0.85rem", marginTop: "0.5rem" }}>
+            Редактирование по промпту доступно для изображений. Для видео пока можно заменить медиа через перегенерацию креатива.
+          </p>
+        )}
+        {!current?.imageBase64 && (
+          <p style={{ color: "var(--muted)", fontSize: "0.85rem", marginTop: "0.5rem" }}>
+            У этого креатива нет медиа для редактирования.
+          </p>
+        )}
         {error && <p className="error">{error}</p>}
       </section>
 

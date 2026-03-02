@@ -43,6 +43,8 @@ export interface TopicsAnalysis {
   bestThemesInsight: string;
 }
 
+export type CreativeStyle = "native" | "history" | "direct" | "humor";
+
 /** Охват поста: просмотры + реакции (реакции учитываем с весом). */
 function engagementScore(p: { views?: number; reactionsCount?: number }): number {
   return (p.views ?? 0) + (p.reactionsCount ?? 0) * 2;
@@ -180,19 +182,66 @@ export async function generateCreative(
   channelInfo: ChannelInfo,
   withImage: boolean,
   selectedTopic?: string,
-  forcedSourcePostIndex?: number
+  forcedSourcePostIndex?: number,
+  style: CreativeStyle = "native"
 ): Promise<{ text: string; imagePrompt: string | null; sourcePostIndex: number | null }> {
   const { base: DEEPSEEK_BASE, apiKey: API_KEY } = getConfig();
   if (!API_KEY) throw new Error("DEEPSEEK_API_KEY не задан");
   const context = buildContext(channelInfo, selectedTopic);
   const indexedPostsContext = buildPostIndexContext(channelInfo);
+  const styleRules: Record<CreativeStyle, string> = {
+    native:
+      [
+        "Стиль: НАТИВНЫЙ.",
+        "Обязательное: текст выглядит как полезный пост, а не прямая реклама.",
+        "Реклама интегрируется мягко: сначала польза/наблюдение, потом аккуратный переход к каналу.",
+        "Запрещено: агрессивные продажи, крикливые формулировки, явный тон «купи прямо сейчас».",
+      ].join(" "),
+    history:
+      [
+        "Стиль: ИСТОРИЯ.",
+        "Обязательное: формат мини-истории с персонажем/ситуацией, завязкой, поворотом и короткой развязкой.",
+        "Первый абзац должен сразу начинаться с сюжетного захода, а не с рекламы.",
+        "Во втором/третьем абзаце плавно подведи к каналу как к логичному продолжению истории.",
+      ].join(" "),
+    direct:
+      [
+        "Стиль: ПРЯМОЙ.",
+        "Обязательное: максимально конкретно и по делу, без длинных вступлений и лирики.",
+        "Быстро сформулируй ценность: что внутри канала и какую выгоду получает читатель.",
+        "Допустим плотный ритм и четкие формулировки, но без воды и расплывчатых фраз.",
+      ].join(" "),
+    humor:
+      [
+        "Стиль: ЮМОРИСТИЧЕСКИЙ.",
+        "Обязательное: минимум 1-2 реально смешных формулировки/сравнения по теме, чтобы текст воспринимался как юмористический.",
+        "Юмор должен быть понятным и уместным, без кринжа, токсичности и грубости.",
+        "Несмотря на юмор, сохрани рекламный смысл и четкий призыв к переходу в канал.",
+      ].join(" "),
+  };
+
+  const styleLengthTarget: Record<CreativeStyle, string> = {
+    native: "400–700 символов",
+    history: "550–900 символов",
+    direct: "300–500 символов",
+    humor: "450–750 символов",
+  };
+
+  const styleContrastRule = sanitizeForModel(`КРИТИЧНО: строго придерживайся выбранного стиля и не смешивай стили между собой.
+Если выбран "история" — это должен быть именно рассказ.
+Если выбран "юмористический" — юмор должен быть явно заметен.
+Если выбран "прямой" — без сторителлинга и без лишних вступлений.
+Если выбран "нативный" — без агрессивной рекламной подачи.`);
+
   const system = sanitizeForModel(`Ты — креативщик для рекламы Telegram-каналов. Твоя задача: создать рекламный пост-креатив по тематике канала.
 Креатив должен быть эксклюзивным: опирайся на конкретные посты и темы канала (например, если есть пост про "SEO в 2026" — упомяни это в креативе: "Всё про SEO в 2026 и не только — подписывайтесь").
 Обязательно включи призыв зайти в канал и ссылку на канал.
 Сделай текст длиннее и структурированнее: 2–3 абзаца, с пустой строкой между абзацами.
-Целевая длина: 450–800 символов.
+Целевая длина (по выбранному стилю): ${styleLengthTarget[style]}.
 Добавь уместные эмодзи в текст (обычно 2–6 штук на весь креатив, без перегруза).
 Если выбрана конкретная тема — креатив должен фокусироваться именно на ней.
+${styleRules[style]}
+${styleContrastRule}
 Без markdown.`);
   const focusedPost =
     forcedSourcePostIndex && forcedSourcePostIndex >= 1 && forcedSourcePostIndex <= channelInfo.posts.length

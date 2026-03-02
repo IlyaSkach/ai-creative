@@ -54,7 +54,12 @@ export async function sendMessage(chatId: string, text: string): Promise<void> {
   if (!data.ok) throw new Error(data.description || `Telegram API error: ${res.status}`);
 }
 
-const SEND_PHOTO_TIMEOUT_MS = 60000;
+function getSendMediaTimeoutMs(): number {
+  const raw = process.env.TELEGRAM_SEND_MEDIA_TIMEOUT_MS?.trim();
+  const parsed = raw ? Number(raw) : NaN;
+  if (!Number.isFinite(parsed) || parsed <= 0) return 180000;
+  return Math.floor(parsed);
+}
 
 function buildMultipartBody(
   boundary: string,
@@ -103,6 +108,7 @@ async function sendMediaMultipart(
   mediaBase64: string,
   mediaType: string
 ): Promise<void> {
+  const sendMediaTimeoutMs = getSendMediaTimeoutMs();
   const token = getBotToken();
   if (!token) throw new Error("TELEGRAM_BOT_TOKEN не задан");
   const url = `${BASE}${token}/${method}`;
@@ -119,7 +125,7 @@ async function sendMediaMultipart(
   );
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), SEND_PHOTO_TIMEOUT_MS);
+  const timeoutId = setTimeout(() => controller.abort(), sendMediaTimeoutMs);
 
   try {
     const res = await fetch(url, {
@@ -144,7 +150,9 @@ async function sendMediaMultipart(
   } catch (e) {
     clearTimeout(timeoutId);
     if (e instanceof Error && e.name === "AbortError") {
-      throw new Error("Таймаут отправки медиа (60 сек). Попробуйте «Только текст» или отправьте позже.");
+      throw new Error(
+        `Таймаут отправки медиа (${Math.round(sendMediaTimeoutMs / 1000)} сек). Попробуйте позже или увеличьте TELEGRAM_SEND_MEDIA_TIMEOUT_MS.`
+      );
     }
     throw e;
   }

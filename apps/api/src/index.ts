@@ -26,9 +26,11 @@ import { telegramRouter } from "./routes/telegram.js";
 const app = express();
 const port = Number(process.env.API_PORT) || 3001;
 const webOrigin = process.env.WEB_ORIGIN || "http://localhost:5173";
+const apiJsonLimit = process.env.API_JSON_LIMIT?.trim() || "120mb";
 
 app.use(cors({ origin: webOrigin, credentials: true }));
-app.use(express.json({ limit: "30mb" }));
+app.use(express.json({ limit: apiJsonLimit }));
+app.use(express.urlencoded({ extended: true, limit: apiJsonLimit }));
 
 app.use("/api/channel", channelRouter);
 app.use("/api/creative", creativeRouter);
