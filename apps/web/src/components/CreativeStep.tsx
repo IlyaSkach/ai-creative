@@ -374,16 +374,7 @@ export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
                   checked={style === "native"}
                   onChange={() => setStyle("native")}
                 />
-                <span>Нативный — аккуратная рекламная интеграция в полезный контент</span>
-              </label>
-              <label style={{ display: "flex", alignItems: "flex-start", gap: "0.55rem", cursor: "pointer" }}>
-                <input
-                  type="radio"
-                  name="creative-style"
-                  checked={style === "history"}
-                  onChange={() => setStyle("history")}
-                />
-                <span>История — креатив через небольшой рассказ/ситуацию</span>
+                <span>Нативный стиль (как обычный пост)</span>
               </label>
               <label style={{ display: "flex", alignItems: "flex-start", gap: "0.55rem", cursor: "pointer" }}>
                 <input
@@ -392,7 +383,43 @@ export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
                   checked={style === "direct"}
                   onChange={() => setStyle("direct")}
                 />
-                <span>Прямая — коротко и сразу по сути рекламы</span>
+                <span>Прямой продающий (жесткий оффер)</span>
+              </label>
+              <label style={{ display: "flex", alignItems: "flex-start", gap: "0.55rem", cursor: "pointer" }}>
+                <input
+                  type="radio"
+                  name="creative-style"
+                  checked={style === "clickbait"}
+                  onChange={() => setStyle("clickbait")}
+                />
+                <span>Кликбейт / интрига</span>
+              </label>
+              <label style={{ display: "flex", alignItems: "flex-start", gap: "0.55rem", cursor: "pointer" }}>
+                <input
+                  type="radio"
+                  name="creative-style"
+                  checked={style === "history"}
+                  onChange={() => setStyle("history")}
+                />
+                <span>История (Storytelling)</span>
+              </label>
+              <label style={{ display: "flex", alignItems: "flex-start", gap: "0.55rem", cursor: "pointer" }}>
+                <input
+                  type="radio"
+                  name="creative-style"
+                  checked={style === "useful"}
+                  onChange={() => setStyle("useful")}
+                />
+                <span>Полезный пост + реклама</span>
+              </label>
+              <label style={{ display: "flex", alignItems: "flex-start", gap: "0.55rem", cursor: "pointer" }}>
+                <input
+                  type="radio"
+                  name="creative-style"
+                  checked={style === "expert"}
+                  onChange={() => setStyle("expert")}
+                />
+                <span>Экспертный / аналитический</span>
               </label>
               <label style={{ display: "flex", alignItems: "flex-start", gap: "0.55rem", cursor: "pointer" }}>
                 <input
@@ -401,7 +428,16 @@ export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
                   checked={style === "humor"}
                   onChange={() => setStyle("humor")}
                 />
-                <span>Юмористический — легкий уместный юмор по теме</span>
+                <span>Мемный / юмористический</span>
+              </label>
+              <label style={{ display: "flex", alignItems: "flex-start", gap: "0.55rem", cursor: "pointer" }}>
+                <input
+                  type="radio"
+                  name="creative-style"
+                  checked={style === "mini_landing"}
+                  onChange={() => setStyle("mini_landing")}
+                />
+                <span>Мини-лендинг внутри поста</span>
               </label>
             </div>
           </div>

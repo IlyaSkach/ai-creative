@@ -28,7 +28,7 @@ creativeRouter.post("/generate", async (req, res) => {
       selectedTopic?: string;
       forcedSourcePostIndex?: number;
       imageMode?: "none" | "generated" | "from_post";
-      style?: "native" | "history" | "direct" | "humor";
+      style?: "native" | "direct" | "clickbait" | "history" | "useful" | "expert" | "humor" | "mini_landing";
     };
     if (!channelInfo?.title || !channelInfo?.channelLink) {
       res.status(400).json({ error: "Нужны данные канала (channelInfo). Сначала вызовите /api/channel/analyze" });

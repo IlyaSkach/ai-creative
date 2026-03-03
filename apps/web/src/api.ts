@@ -1,5 +1,13 @@
 const API = "/api";
-export type CreativeStyle = "native" | "history" | "direct" | "humor";
+export type CreativeStyle =
+  | "native"
+  | "direct"
+  | "clickbait"
+  | "history"
+  | "useful"
+  | "expert"
+  | "humor"
+  | "mini_landing";
 
 export interface ChannelInfo {
   title: string;
