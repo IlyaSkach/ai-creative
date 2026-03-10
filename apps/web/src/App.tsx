@@ -3,9 +3,10 @@ import type { ChannelInfo } from "./api";
 import { editCreativeImageWithAi, editCreativeWithAi, generateCreative, sendToTelegram } from "./api";
 import { ChannelStep } from "./components/ChannelStep";
 import { CreativeStep, type DraftCreative } from "./components/CreativeStep";
+import { LandingStep } from "./components/LandingStep";
 import { SendStep } from "./components/SendStep";
 
-type Step = "channel" | "creative" | "send";
+type Step = "home" | "channel" | "landing" | "creative" | "send";
 
 function engagementScore(p: { views?: number; reactionsCount?: number }): number {
   return (p.views ?? 0) + (p.reactionsCount ?? 0) * 2;
@@ -58,10 +59,11 @@ function appendSourcePostLink(text: string, link: string | null): string {
 }
 
 export default function App() {
-  const [step, setStep] = useState<Step>("channel");
+  const [step, setStep] = useState<Step>("home");
   const [channelInfo, setChannelInfo] = useState<ChannelInfo | null>(null);
   const [creatives, setCreatives] = useState<DraftCreative[]>([]);
   const [activeCreativeIndex, setActiveCreativeIndex] = useState(0);
+  const [landingMessage, setLandingMessage] = useState("");
 
   const onChannelDone = async (info: ChannelInfo) => {
     setChannelInfo(info);
@@ -80,11 +82,46 @@ export default function App() {
     <>
       <h1>AI Creative</h1>
       <p style={{ color: "var(--muted)", margin: 0 }}>
-        Вставьте ссылку на Telegram-канал — ИИ проанализирует канал и создаст рекламный креатив.
+        Создавайте креативы из Telegram-каналов и лендингов.
       </p>
+
+      {step === "home" && (
+        <section className="card mt1">
+          <h2>Выберите режим</h2>
+          <div className="flex">
+            <button
+              type="button"
+              onClick={() => {
+                setLandingMessage("");
+                setStep("channel");
+              }}
+            >
+              Креатив из TG
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => {
+                setLandingMessage("");
+                setStep("landing");
+              }}
+            >
+              Креатив из Лендинга
+            </button>
+          </div>
+          {landingMessage && <p style={{ color: "var(--muted)", marginTop: "0.75rem" }}>{landingMessage}</p>}
+        </section>
+      )}
 
       {step === "channel" && (
         <ChannelStep onDone={onChannelDone} />
+      )}
+
+      {step === "landing" && (
+        <LandingStep
+          onDone={onChannelDone}
+          onBack={() => setStep("home")}
+        />
       )}
 
       {step === "creative" && channelInfo && (
@@ -123,7 +160,9 @@ export default function App() {
               topicPrompt,
               nextForcedIndex,
               currentCreative.imageMode,
-              currentCreative.style
+              currentCreative.style,
+              currentCreative.goal,
+              currentCreative.landingContactsToInclude
             );
             let nextImageBase64: string | null = null;
             let nextImageMediaType: string | null = null;

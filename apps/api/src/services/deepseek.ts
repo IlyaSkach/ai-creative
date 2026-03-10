@@ -35,6 +35,12 @@ export interface ChannelInfo {
   username: string;
   channelLink: string;
   posts: Array<{ postId?: number; date: string; text: string; photoBase64?: string; mediaType?: string; views?: number; reactionsCount?: number }>;
+  landingContacts?: {
+    phones?: string[];
+    emails?: string[];
+    whatsapp?: string[];
+    telegram?: string[];
+  };
 }
 
 export interface TopicsAnalysis {
@@ -52,6 +58,7 @@ export type CreativeStyle =
   | "expert"
   | "humor"
   | "mini_landing";
+export type CreativeGoal = "subscribers" | "sales" | "brand";
 
 /** Охват поста: просмотры + реакции (реакции учитываем с весом). */
 function engagementScore(p: { views?: number; reactionsCount?: number }): number {
@@ -191,7 +198,9 @@ export async function generateCreative(
   withImage: boolean,
   selectedTopic?: string,
   forcedSourcePostIndex?: number,
-  style: CreativeStyle = "native"
+  style: CreativeStyle = "native",
+  goal: CreativeGoal = "subscribers",
+  contactsToInclude?: string[]
 ): Promise<{ text: string; imagePrompt: string | null; sourcePostIndex: number | null }> {
   const { base: DEEPSEEK_BASE, apiKey: API_KEY } = getConfig();
   if (!API_KEY) throw new Error("DEEPSEEK_API_KEY не задан");
@@ -252,6 +261,14 @@ export async function generateCreative(
 
   const styleContrastRule = sanitizeForModel(`КРИТИЧНО: строго придерживайся только выбранного стиля и его структуры.
 Не смешивай стили между собой и не перескакивай между форматами.`);
+  const goalRules: Record<CreativeGoal, string> = {
+    subscribers:
+      "Цель креатива: ПОДПИСЧИКИ. Главный акцент — зачем подписаться прямо сейчас, какую пользу человек будет регулярно получать в канале.",
+    sales:
+      "Цель креатива: ПРОДАЖИ. Главный акцент — подвести к покупке товара/услуги: оффер, выгоды, снятие возражений, явный CTA на действие.",
+    brand:
+      "Цель креатива: БРЕНД / PR. Главный акцент — повысить узнаваемость, доверие и интерес к бренду/продукту, не давить жесткой продажей.",
+  };
 
   const system = sanitizeForModel(`Ты профессиональный копирайтер рекламных постов для Telegram.
 Твоя задача: создать рекламный пост-креатив по тематике канала.
@@ -269,6 +286,7 @@ export async function generateCreative(
 
 ${styleRules[style]}
 ${styleContrastRule}
+${goalRules[goal]}
 Без markdown.`);
   const focusedPost =
     forcedSourcePostIndex && forcedSourcePostIndex >= 1 && forcedSourcePostIndex <= channelInfo.posts.length
@@ -277,12 +295,19 @@ ${styleContrastRule}
   const focusedPostHint = focusedPost
     ? `\nФокусный пост для креатива: #${forcedSourcePostIndex} (${trimForModel(focusedPost.text || "(без текста)", 220)}). Используй его как главную основу.\n`
     : "";
+  const contactsBlock =
+    Array.isArray(contactsToInclude) && contactsToInclude.length > 0
+      ? `\nКонтакты для включения в креатив (добавь их в финальный текст без изменений):\n${contactsToInclude
+          .map((c) => `- ${trimForModel(String(c), 120)}`)
+          .join("\n")}\n`
+      : "";
 
   const user = sanitizeForModel(`${context}
 
 Посты с индексами (используй их для выбора релевантного поста по теме):
 ${indexedPostsContext || "Нет постов"}
 ${focusedPostHint}
+${contactsBlock}
 
 Сгенерируй креатив.${selectedTopic ? ` Фокус-тема: ${selectedTopic}.` : ""}
 

@@ -8,6 +8,7 @@ export type CreativeStyle =
   | "expert"
   | "humor"
   | "mini_landing";
+export type CreativeGoal = "subscribers" | "sales" | "brand";
 
 export interface ChannelInfo {
   title: string;
@@ -17,6 +18,12 @@ export interface ChannelInfo {
   posts: Array<{ postId?: number; date: string; text: string; photoBase64?: string; mediaType?: string; views?: number; reactionsCount?: number }>;
   directPostMode?: boolean;
   sourcePostLink?: string;
+  landingContacts?: {
+    phones?: string[];
+    emails?: string[];
+    whatsapp?: string[];
+    telegram?: string[];
+  };
 }
 
 export interface ChannelTopics {
@@ -65,13 +72,24 @@ export async function analyzeChannel(link: string): Promise<ChannelInfo> {
   return parseApiResponse<ChannelInfo>(res, "Ошибка анализа канала");
 }
 
+export async function analyzeLanding(link: string): Promise<ChannelInfo> {
+  const res = await fetch(`${API}/landing/analyze`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ link }),
+  });
+  return parseApiResponse<ChannelInfo>(res, "Ошибка анализа лендинга");
+}
+
 export async function generateCreative(
   channelInfo: ChannelInfo,
   withImage: boolean,
   selectedTopic?: string,
   forcedSourcePostIndex?: number,
   imageMode?: "none" | "generated" | "from_post",
-  style: CreativeStyle = "native"
+  style: CreativeStyle = "native",
+  goal: CreativeGoal = "subscribers",
+  contactsToInclude?: string[]
 ): Promise<{ text: string; imageBase64: string | null; imageMediaType?: string | null; imagePrompt: string | null; imageError?: string | null; sourcePostIndex?: number | null }> {
   const lightChannelInfo = stripHeavyMedia(channelInfo);
   const res = await fetch(`${API}/creative/generate`, {
@@ -84,6 +102,8 @@ export async function generateCreative(
       forcedSourcePostIndex,
       imageMode,
       style,
+      goal,
+      contactsToInclude: contactsToInclude && contactsToInclude.length > 0 ? contactsToInclude : undefined,
     }),
   });
   return parseApiResponse<{ text: string; imageBase64: string | null; imageMediaType?: string | null; imagePrompt: string | null; imageError?: string | null; sourcePostIndex?: number | null }>(

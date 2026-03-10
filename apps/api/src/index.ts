@@ -20,6 +20,7 @@ for (const envPath of envCandidates) {
 import express from "express";
 import cors from "cors";
 import { channelRouter } from "./routes/channel.js";
+import { landingRouter } from "./routes/landing.js";
 import { creativeRouter } from "./routes/creative.js";
 import { telegramRouter } from "./routes/telegram.js";
 
@@ -33,6 +34,7 @@ app.use(express.json({ limit: apiJsonLimit }));
 app.use(express.urlencoded({ extended: true, limit: apiJsonLimit }));
 
 app.use("/api/channel", channelRouter);
+app.use("/api/landing", landingRouter);
 app.use("/api/creative", creativeRouter);
 app.use("/api/telegram", telegramRouter);
 

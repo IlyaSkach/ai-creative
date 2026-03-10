@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ChannelInfo } from "../api";
-import type { CreativeStyle } from "../api";
+import type { CreativeGoal, CreativeStyle } from "../api";
 import { analyzeChannelTopics, generateCreative } from "../api";
 
 export type ImageMode = "none" | "generated" | "from_post";
@@ -10,6 +10,8 @@ export interface DraftCreative {
   topicLabel: string;
   topicPrompt?: string;
   style: CreativeStyle;
+  goal: CreativeGoal;
+  landingContactsToInclude?: string[];
   selectedTopics: string[];
   attachSourcePostLink: boolean;
   imageMode: ImageMode;
@@ -100,8 +102,10 @@ function appendSourcePostLink(text: string, link: string | null): string {
 
 export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
   const isDirectPostMode = Boolean(channelInfo.directPostMode);
+  const isLandingMode = !/(^https?:\/\/)?(t\.me|telegram\.me|telegram\.dog)\//i.test(channelInfo.channelLink);
   const [imageMode, setImageMode] = useState<ImageMode>("generated");
   const [style, setStyle] = useState<CreativeStyle>("native");
+  const [goal, setGoal] = useState<CreativeGoal>("subscribers");
   const [generationMode, setGenerationMode] = useState<GenerationMode>("single");
   const [attachSourcePostLink, setAttachSourcePostLink] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -112,14 +116,34 @@ export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
   const [bestThemesInsight, setBestThemesInsight] = useState("");
   const [topics, setTopics] = useState<string[]>([]);
   const [selectedTopics, setSelectedTopics] = useState<string[]>([]);
+  const [selectedLandingMediaIndex, setSelectedLandingMediaIndex] = useState<number | null>(null);
+  const [selectedLandingContacts, setSelectedLandingContacts] = useState<string[]>([]);
   const [generated, setGenerated] = useState<DraftCreative[]>([]);
 
   const hasPostMedia = channelInfo.posts.some((p) => p.photoBase64);
   const postMediaCount = channelInfo.posts.filter((p) => p.photoBase64).length;
+  const landingMediaPosts = channelInfo.posts
+    .map((p, idx) => ({ post: p, index: idx + 1 }))
+    .filter((x) => Boolean(x.post.photoBase64));
+  const landingContactsList = [
+    ...(channelInfo.landingContacts?.phones || []).map((v) => `Телефон: ${v}`),
+    ...(channelInfo.landingContacts?.emails || []).map((v) => `Email: ${v}`),
+    ...(channelInfo.landingContacts?.whatsapp || []).map((v) => `WhatsApp: ${v}`),
+    ...(channelInfo.landingContacts?.telegram || []).map((v) => `Telegram: ${v}`),
+  ];
 
   useEffect(() => {
     let cancelled = false;
     const run = async () => {
+      if (isLandingMode) {
+        setTopics([]);
+        setSelectedTopics([]);
+        setTopicsError("");
+        setBestThemesInsight("");
+        setTopicSummary(channelInfo.description?.trim() || `Сайт/лендинг: ${channelInfo.title}`);
+        setTopicsLoading(false);
+        return;
+      }
       if (isDirectPostMode) {
         setTopics([]);
         setSelectedTopics(["Пост по ссылке"]);
@@ -152,7 +176,24 @@ export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
     return () => {
       cancelled = true;
     };
-  }, [channelInfo, isDirectPostMode]);
+  }, [channelInfo, isDirectPostMode, isLandingMode]);
+
+  useEffect(() => {
+    if (!isLandingMode) return;
+    if (landingMediaPosts.length === 0) {
+      setSelectedLandingMediaIndex(null);
+      return;
+    }
+    setSelectedLandingMediaIndex((prev) => {
+      if (prev && landingMediaPosts.some((x) => x.index === prev)) return prev;
+      return landingMediaPosts[0].index;
+    });
+  }, [isLandingMode, landingMediaPosts]);
+
+  useEffect(() => {
+    if (!isLandingMode) return;
+    setSelectedLandingContacts(landingContactsList);
+  }, [isLandingMode, channelInfo.channelLink]);
 
   const toggleTopic = (topic: string) => {
     setSelectedTopics((prev) =>
@@ -162,17 +203,23 @@ export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
 
   const buildCreative = async (topicPrompt: string | undefined, topicLabel: string, allSelected: string[]): Promise<DraftCreative> => {
     const withImage = imageMode === "generated";
-    const forcedSourcePostIndex = isDirectPostMode ? 1 : undefined;
+    const forcedSourcePostIndex = isDirectPostMode
+      ? 1
+      : (isLandingMode && imageMode === "from_post" ? (selectedLandingMediaIndex ?? undefined) : undefined);
     const preferredMedia = isDirectPostMode
       ? pickMediaBySourcePostIndex(channelInfo, 1)
-      : pickMediaByTopic(channelInfo, topicPrompt);
+      : (isLandingMode && imageMode === "from_post"
+        ? pickMediaBySourcePostIndex(channelInfo, selectedLandingMediaIndex ?? null)
+        : pickMediaByTopic(channelInfo, topicPrompt));
     const result = await generateCreative(
       channelInfo,
       withImage,
       topicPrompt,
       forcedSourcePostIndex ?? preferredMedia?.index,
       imageMode,
-      style
+      style,
+      goal,
+      isLandingMode ? selectedLandingContacts : undefined
     );
 
     let draft: DraftCreative;
@@ -182,6 +229,8 @@ export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
         topicLabel,
         topicPrompt,
         style,
+        goal,
+        landingContactsToInclude: isLandingMode ? selectedLandingContacts : undefined,
         selectedTopics: allSelected,
         attachSourcePostLink,
         imageMode,
@@ -201,6 +250,8 @@ export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
         topicLabel,
         topicPrompt,
         style,
+        goal,
+        landingContactsToInclude: isLandingMode ? selectedLandingContacts : undefined,
         selectedTopics: allSelected,
         attachSourcePostLink,
         imageMode,
@@ -214,6 +265,8 @@ export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
         topicLabel,
         topicPrompt,
         style,
+        goal,
+        landingContactsToInclude: isLandingMode ? selectedLandingContacts : undefined,
         selectedTopics: allSelected,
         attachSourcePostLink,
         imageMode,
@@ -235,6 +288,15 @@ export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
     setError("");
     setLoading(true);
     try {
+      if (isLandingMode) {
+        const landingSelected = ["Лендинг"];
+        const landingCreative = await buildCreative(undefined, "Креатив по лендингу", landingSelected);
+        if (imageMode === "from_post" && !landingCreative.imageBase64) {
+          setError("Не удалось взять картинку с сайта. Выбери другую картинку или режим «С картинкой (ИИ)».");
+        }
+        setGenerated([landingCreative]);
+        return;
+      }
       if (isDirectPostMode) {
         const directSelected = ["Пост по ссылке"];
         const directCreative = await buildCreative(undefined, "Креатив по выбранному посту", directSelected);
@@ -294,16 +356,44 @@ export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
             {channelInfo.directPostMode && channelInfo.sourcePostLink ? channelInfo.sourcePostLink : channelInfo.channelLink}
           </a>
           {" · "}
-          Последних постов: {channelInfo.posts.length}
+          {isLandingMode ? "Блоков контента: " : "Последних постов: "}{channelInfo.posts.length}
           {postMediaCount > 0 && `, с медиа (картинка/гиф/видео): ${postMediaCount}`}
-          {channelInfo.posts.length > 0 && " · креатив по постам с макс. охватом (просмотры + реакции)"}
+          {!isLandingMode && channelInfo.posts.length > 0 && " · креатив по постам с макс. охватом (просмотры + реакции)"}
         </p>
       </section>
 
       <section className="card">
         <h2>Креатив</h2>
         <div style={{ display: "grid", gap: "0.9rem" }}>
-          {!isDirectPostMode && (
+          {isLandingMode && (
+            <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "0.85rem" }}>
+              <p className="label" style={{ marginBottom: "0.45rem" }}>Аналитика сайта</p>
+              <p style={{ color: "var(--muted)", margin: 0 }}>
+                {topicSummary || `Сайт/лендинг: ${channelInfo.title}`}
+              </p>
+              {landingContactsList.length > 0 && (
+                <div style={{ marginTop: "0.75rem", display: "grid", gap: "0.45rem" }}>
+                  <p className="label" style={{ margin: 0 }}>Контакты (включать в креатив)</p>
+                  {landingContactsList.map((contact) => (
+                    <label key={contact} style={{ display: "flex", alignItems: "flex-start", gap: "0.55rem", cursor: "pointer" }}>
+                      <input
+                        type="checkbox"
+                        checked={selectedLandingContacts.includes(contact)}
+                        onChange={(e) => {
+                          setSelectedLandingContacts((prev) => (
+                            e.target.checked ? [...prev, contact] : prev.filter((x) => x !== contact)
+                          ));
+                        }}
+                      />
+                      <span>{contact}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {!isDirectPostMode && !isLandingMode && (
             <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "0.85rem" }}>
               <p className="label" style={{ marginBottom: "0.45rem" }}>Темы канала (мультивыбор)</p>
               {topicsLoading ? (
@@ -338,7 +428,7 @@ export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
             </div>
           )}
 
-          {!isDirectPostMode && (
+          {!isDirectPostMode && !isLandingMode && (
             <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "0.85rem" }}>
               <p className="label" style={{ marginBottom: "0.45rem" }}>Как генерировать</p>
               <div style={{ display: "grid", gap: "0.5rem" }}>
@@ -443,6 +533,39 @@ export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
           </div>
 
           <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "0.85rem" }}>
+            <p className="label" style={{ marginBottom: "0.45rem" }}>Цель креатива</p>
+            <div style={{ display: "grid", gap: "0.5rem" }}>
+              <label style={{ display: "flex", alignItems: "flex-start", gap: "0.55rem", cursor: "pointer" }}>
+                <input
+                  type="radio"
+                  name="creative-goal"
+                  checked={goal === "subscribers"}
+                  onChange={() => setGoal("subscribers")}
+                />
+                <span>Подписчики — привлечь новых подписчиков в канал</span>
+              </label>
+              <label style={{ display: "flex", alignItems: "flex-start", gap: "0.55rem", cursor: "pointer" }}>
+                <input
+                  type="radio"
+                  name="creative-goal"
+                  checked={goal === "sales"}
+                  onChange={() => setGoal("sales")}
+                />
+                <span>Продажи — продать товар или услугу</span>
+              </label>
+              <label style={{ display: "flex", alignItems: "flex-start", gap: "0.55rem", cursor: "pointer" }}>
+                <input
+                  type="radio"
+                  name="creative-goal"
+                  checked={goal === "brand"}
+                  onChange={() => setGoal("brand")}
+                />
+                <span>Бренд / PR — повысить узнаваемость и интерес к бренду</span>
+              </label>
+            </div>
+          </div>
+
+          <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "0.85rem" }}>
             <p className="label" style={{ marginBottom: "0.45rem" }}>Формат креатива</p>
             <div style={{ display: "grid", gap: "0.5rem" }}>
               <label style={{ display: "flex", alignItems: "flex-start", gap: "0.55rem", cursor: "pointer" }}>
@@ -477,21 +600,75 @@ export function CreativeStep({ channelInfo, onDone }: CreativeStepProps) {
                 <span>Только текст</span>
               </label>
             </div>
+            {isLandingMode && imageMode === "from_post" && landingMediaPosts.length > 0 && (
+              <div style={{ marginTop: "0.75rem", display: "grid", gap: "0.45rem" }}>
+                <p className="label" style={{ margin: 0 }}>Картинка с сайта (выбери одну)</p>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: "0.6rem" }}>
+                  {landingMediaPosts.map(({ index, post }, idx) => {
+                    const checked = selectedLandingMediaIndex === index;
+                    return (
+                      <label
+                        key={index}
+                        style={{
+                          border: checked ? "1px solid var(--accent)" : "1px solid var(--border)",
+                          borderRadius: "var(--radius)",
+                          padding: "0.45rem",
+                          cursor: "pointer",
+                          display: "grid",
+                          gap: "0.35rem",
+                          background: checked ? "rgba(88,166,255,0.08)" : "transparent",
+                        }}
+                      >
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.45rem" }}>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => setSelectedLandingMediaIndex((prev) => (prev === index ? null : index))}
+                          />
+                          <span style={{ fontSize: "0.9rem" }}>{`Картинка ${idx + 1}`}</span>
+                        </div>
+                        <img
+                          src={`data:${post.mediaType || "image/jpeg"};base64,${post.photoBase64}`}
+                          alt={`Картинка ${idx + 1}`}
+                          style={{
+                            width: "100%",
+                            height: "110px",
+                            objectFit: "cover",
+                            borderRadius: "0.45rem",
+                            border: "1px solid var(--border)",
+                          }}
+                        />
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
-          <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "0.85rem" }}>
-            <p className="label" style={{ marginBottom: "0.45rem" }}>Дополнительно</p>
-            <label style={{ display: "flex", alignItems: "flex-start", gap: "0.55rem", cursor: "pointer" }}>
-              <input
-                type="checkbox"
-                checked={attachSourcePostLink}
-                onChange={(e) => setAttachSourcePostLink(e.target.checked)}
-              />
-              <span>Добавлять в конец креатива ссылку на пост-источник</span>
-            </label>
-          </div>
+          {!isLandingMode && (
+            <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "0.85rem" }}>
+              <p className="label" style={{ marginBottom: "0.45rem" }}>Дополнительно</p>
+              <label style={{ display: "flex", alignItems: "flex-start", gap: "0.55rem", cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={attachSourcePostLink}
+                  onChange={(e) => setAttachSourcePostLink(e.target.checked)}
+                />
+                <span>Добавлять в конец креатива ссылку на пост-источник</span>
+              </label>
+            </div>
+          )}
         </div>
         <div className="flex">
-          <button onClick={handleGenerate} disabled={loading || topicsLoading || (!isDirectPostMode && selectedTopics.length === 0)}>
+          <button
+            onClick={handleGenerate}
+            disabled={
+              loading ||
+              topicsLoading ||
+              (!isDirectPostMode && !isLandingMode && selectedTopics.length === 0) ||
+              (isLandingMode && imageMode === "from_post" && !selectedLandingMediaIndex)
+            }
+          >
             {loading ? "Генерирую…" : "Сгенерировать креатив"}
           </button>
         </div>

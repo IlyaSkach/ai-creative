@@ -29,6 +29,8 @@ creativeRouter.post("/generate", async (req, res) => {
       forcedSourcePostIndex?: number;
       imageMode?: "none" | "generated" | "from_post";
       style?: "native" | "direct" | "clickbait" | "history" | "useful" | "expert" | "humor" | "mini_landing";
+      goal?: "subscribers" | "sales" | "brand";
+      contactsToInclude?: string[];
     };
     if (!channelInfo?.title || !channelInfo?.channelLink) {
       res.status(400).json({ error: "Нужны данные канала (channelInfo). Сначала вызовите /api/channel/analyze" });
@@ -39,7 +41,11 @@ creativeRouter.post("/generate", async (req, res) => {
       Boolean(withImage),
       selectedTopic,
       typeof forcedSourcePostIndex === "number" ? forcedSourcePostIndex : undefined,
-      req.body?.style
+      req.body?.style,
+      req.body?.goal,
+      Array.isArray(req.body?.contactsToInclude)
+        ? req.body.contactsToInclude.filter((x: unknown) => typeof x === "string").slice(0, 12)
+        : undefined
     );
     const imageMode = req.body?.imageMode as "none" | "generated" | "from_post" | undefined;
     let imageBase64: string | null = null;

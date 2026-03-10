@@ -1,1 +1,1 @@
-{"root":["./src/app.tsx","./src/api.ts","./src/main.tsx","./src/vite-env.d.ts","./src/components/channelstep.tsx","./src/components/creativestep.tsx","./src/components/sendstep.tsx"],"version":"5.9.3"}
+{"root":["./src/app.tsx","./src/api.ts","./src/main.tsx","./src/vite-env.d.ts","./src/components/channelstep.tsx","./src/components/creativestep.tsx","./src/components/landingstep.tsx","./src/components/sendstep.tsx"],"version":"5.9.3"}

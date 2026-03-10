@@ -58,6 +58,13 @@ export interface ChannelPost {
   reactionsCount?: number;
 }
 
+export interface LandingContacts {
+  phones?: string[];
+  emails?: string[];
+  whatsapp?: string[];
+  telegram?: string[];
+}
+
 export interface ChannelInfo {
   title: string;
   description: string;
@@ -66,6 +73,7 @@ export interface ChannelInfo {
   posts: ChannelPost[];
   directPostMode?: boolean;
   sourcePostLink?: string;
+  landingContacts?: LandingContacts;
 }
 
 interface ParsedInput {
