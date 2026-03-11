@@ -24,6 +24,7 @@ export function SendStep({
   onSend,
 }: SendStepProps) {
   const PETR_CHAT_ID = "140349245";
+  const LUMAN_CHAT_ID = "558234437";
   const current = creatives[activeCreativeIndex];
   const [editedText, setEditedText] = useState(current?.text || "");
   useEffect(() => setEditedText(current?.text || ""), [current?.text, activeCreativeIndex]);
@@ -301,6 +302,17 @@ export function SendStep({
                 disabled={sendLoading || chatIdLoading}
               >
                 Отправить Петр
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => {
+                  setTo(LUMAN_CHAT_ID);
+                  setChatIdResult(`Подставлен chat_id Люман: ${LUMAN_CHAT_ID}`);
+                }}
+                disabled={sendLoading || chatIdLoading}
+              >
+                Отправить Люман
               </button>
             </div>
             {chatIdResult && <p style={{ color: "var(--accent)", fontSize: "0.9rem", margin: "0 0 0.5rem" }}>{chatIdResult}</p>}
