@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { fetchTelegramChatIds } from "../api";
 import type { DraftCreative } from "./CreativeStep";
+import { RichTextEditor, getTelegramHtml } from "./RichTextEditor";
 
 interface SendStepProps {
   creatives: DraftCreative[];
@@ -10,7 +11,13 @@ interface SendStepProps {
   onEdit: (instruction: string, currentText: string) => Promise<string>;
   onEditImage: (instruction: string, currentText: string) => Promise<void>;
   onReroll: () => Promise<void>;
-  onSend: (to: string, text: string, imageBase64?: string | null, imageMediaType?: string | null) => Promise<void>;
+  onSend: (
+    to: string,
+    text: string,
+    imageBase64?: string | null,
+    imageMediaType?: string | null,
+    mediaItems?: Array<{ base64: string; mediaType: string }>
+  ) => Promise<void>;
 }
 
 export function SendStep({
@@ -40,14 +47,6 @@ export function SendStep({
   const [sent, setSent] = useState(false);
   const [chatIdLoading, setChatIdLoading] = useState(false);
   const [chatIdResult, setChatIdResult] = useState<string | null>(null);
-  const textAreaRef = useRef<HTMLTextAreaElement | null>(null);
-
-  useEffect(() => {
-    const el = textAreaRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${el.scrollHeight}px`;
-  }, [editedText, activeCreativeIndex]);
 
   const handleAiEdit = async () => {
     if (!aiInstruction.trim()) return;
@@ -102,9 +101,15 @@ export function SendStep({
     try {
       for (let i = 0; i < creatives.length; i++) {
         const item = creatives[i];
-        const textToSend = i === activeCreativeIndex ? editedText : item.text;
+        const textToSend = getTelegramHtml(i === activeCreativeIndex ? editedText : item.text);
         setSendProgress(`Отправляю ${i + 1} из ${creatives.length}…`);
-        await onSend(to.trim(), textToSend, item.imageBase64 || null, item.imageMediaType || undefined);
+        await onSend(
+          to.trim(),
+          textToSend,
+          item.imageBase64 || null,
+          item.imageMediaType || undefined,
+          item.mediaItems
+        );
       }
       setSendProgress(`Отправлено ${creatives.length} из ${creatives.length}.`);
       setSent(true);
@@ -121,48 +126,82 @@ export function SendStep({
         <h2>Редактирование</h2>
         {creatives.length > 1 && (
           <div className="mb1">
-            <label className="label" htmlFor="creative-select">Какой креатив редактируем</label>
-            <select
-              id="creative-select"
-              value={String(activeCreativeIndex)}
-              onChange={(e) => onSelectCreative(Number(e.target.value))}
-            >
-              {creatives.map((c, idx) => (
-                <option key={`${c.topicLabel}-${idx}`} value={String(idx)}>
-                  {idx + 1}. {c.topicLabel}
-                </option>
-              ))}
-            </select>
+            <p className="label" style={{ marginBottom: "0.5rem" }}>Креатив {activeCreativeIndex + 1} из {creatives.length}</p>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => onSelectCreative(Math.max(0, activeCreativeIndex - 1))}
+                disabled={activeCreativeIndex <= 0}
+              >
+                ←
+              </button>
+              <div style={{ display: "flex", gap: "0.35rem", alignItems: "center" }}>
+                {creatives.map((_, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    className={idx === activeCreativeIndex ? "" : "secondary"}
+                    onClick={() => onSelectCreative(idx)}
+                    style={{
+                      minWidth: 36,
+                      padding: "0.35rem 0.5rem",
+                      fontWeight: idx === activeCreativeIndex ? 600 : 400,
+                    }}
+                  >
+                    {idx + 1}
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => onSelectCreative(Math.min(creatives.length - 1, activeCreativeIndex + 1))}
+                disabled={activeCreativeIndex >= creatives.length - 1}
+              >
+                →
+              </button>
+            </div>
           </div>
         )}
-        <p className="label">Текст креатива (можно править вручную)</p>
-        {current?.imageBase64 && (
+        <p className="label">Текст креатива (можно править, форматировать)</p>
+        {((current?.mediaItems && current.mediaItems.length > 0) || current?.imageBase64) && (
           <div className="mb1">
             <p className="label">Текущее медиа</p>
-            {(current.imageMediaType || "").toLowerCase().startsWith("video/") ? (
-              <video
-                src={`data:${current.imageMediaType};base64,${current.imageBase64}`}
-                style={{ maxWidth: "100%", borderRadius: "var(--radius)", border: "1px solid var(--border)" }}
-                controls
-                loop
-                muted
-                playsInline
-              />
-            ) : (
-              <img
-                src={`data:${current.imageMediaType || "image/jpeg"};base64,${current.imageBase64}`}
-                alt="Текущее медиа креатива"
-                style={{ maxWidth: "100%", borderRadius: "var(--radius)", border: "1px solid var(--border)" }}
-              />
-            )}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+              {(current.mediaItems && current.mediaItems.length > 0
+                ? current.mediaItems
+                : current.imageBase64
+                  ? [{ base64: current.imageBase64, mediaType: current.imageMediaType || "image/jpeg" }]
+                  : []
+              ).map((m, mi) => (
+                <div key={mi} style={{ flex: "1 1 120px", maxWidth: 200 }}>
+                  {(m.mediaType || "").toLowerCase().startsWith("video/") ? (
+                    <video
+                      src={`data:${m.mediaType};base64,${m.base64}`}
+                      style={{ width: "100%", borderRadius: "var(--radius)", border: "1px solid var(--border)" }}
+                      controls
+                      loop
+                      muted
+                      playsInline
+                    />
+                  ) : (
+                    <img
+                      src={`data:${m.mediaType || "image/jpeg"};base64,${m.base64}`}
+                      alt={`Медиа ${mi + 1}`}
+                      style={{ width: "100%", borderRadius: "var(--radius)", border: "1px solid var(--border)", objectFit: "cover" }}
+                    />
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
         )}
-        <textarea
-          ref={textAreaRef}
+        <RichTextEditor
           value={editedText}
-          onChange={(e) => setEditedText(e.target.value)}
+          onChange={setEditedText}
           placeholder="Текст креатива…"
-          style={{ overflow: "hidden", resize: "none" }}
+          minHeight={140}
         />
         <p className="label mt1">Или попросите ИИ изменить</p>
         <div className="flex" style={{ gap: "0.5rem", alignItems: "stretch" }}>

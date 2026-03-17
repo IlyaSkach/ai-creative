@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { sendMessage, sendPhoto, sendAnimation, getUpdates } from "../services/telegram.js";
+import { sendMessage, sendPhoto, sendAnimation, sendMediaGroup, getUpdates } from "../services/telegram.js";
 
 export const telegramRouter = Router();
 
@@ -33,15 +33,17 @@ telegramRouter.get("/updates", async (_req, res) => {
 
 /**
  * Отправка креатива в Telegram.
- * Body: { to: string (username @user или chat_id), text: string, imageBase64?: string, imageMediaType?: string }
+ * Body: { to, text, imageBase64?, imageMediaType?, mediaItems?: Array<{base64, mediaType}> }
+ * Если mediaItems.length > 1 — отправляется sendMediaGroup.
  */
 telegramRouter.post("/send", async (req, res) => {
   try {
-    const { to, text, imageBase64, imageMediaType } = req.body as {
+    const { to, text, imageBase64, imageMediaType, mediaItems } = req.body as {
       to?: string;
       text?: string;
       imageBase64?: string;
       imageMediaType?: string;
+      mediaItems?: Array<{ base64: string; mediaType: string }>;
     };
     if (!to || typeof to !== "string") {
       res.status(400).json({ error: "Укажите to — @username или chat_id получателя" });
@@ -52,13 +54,23 @@ telegramRouter.post("/send", async (req, res) => {
       return;
     }
     const chatId = to.startsWith("@") ? to : to.trim();
-    if (imageBase64 && typeof imageBase64 === "string") {
-      const mediaType = (imageMediaType || "image/png").toLowerCase();
-      const isAnimated = mediaType.includes("gif") || mediaType.startsWith("video/");
-      if (isAnimated) {
-        await sendAnimation(chatId, text, imageBase64, mediaType);
+    const items = Array.isArray(mediaItems) && mediaItems.length > 0
+      ? mediaItems.filter((m) => m && typeof m.base64 === "string")
+      : imageBase64 && typeof imageBase64 === "string"
+        ? [{ base64: imageBase64, mediaType: imageMediaType || "image/png" }]
+        : [];
+    if (items.length > 0) {
+      if (items.length > 1) {
+        await sendMediaGroup(chatId, text, items);
       } else {
-        await sendPhoto(chatId, text, imageBase64, mediaType);
+        const m = items[0];
+        const mediaType = (m.mediaType || "image/png").toLowerCase();
+        const isAnimated = mediaType.includes("gif") || mediaType.startsWith("video/");
+        if (isAnimated) {
+          await sendAnimation(chatId, text, m.base64, mediaType);
+        } else {
+          await sendPhoto(chatId, text, m.base64, mediaType);
+        }
       }
     } else {
       await sendMessage(chatId, text);

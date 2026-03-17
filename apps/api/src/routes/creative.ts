@@ -1,18 +1,32 @@
 import { Router } from "express";
 import { analyzeChannelTopics, generateCreative, editCreativeWithAi } from "../services/deepseek.js";
+import { getAvailableProviders } from "../services/ai-providers.js";
 import { editImageWithAiOverlay, generateImage } from "../services/bothub.js";
 import type { ChannelInfo } from "../services/deepseek.js";
+import type { AiProvider } from "../services/ai-providers.js";
 
 export const creativeRouter = Router();
 
+creativeRouter.get("/providers", (_req, res) => {
+  try {
+    const providers = getAvailableProviders();
+    res.json({ providers });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "Ошибка";
+    res.status(500).json({ error: message });
+  }
+});
+
 creativeRouter.post("/themes", async (req, res) => {
   try {
-    const { channelInfo } = req.body as { channelInfo: ChannelInfo };
+    const { channelInfo, aiProvider } = req.body as { channelInfo: ChannelInfo; aiProvider?: AiProvider };
     if (!channelInfo?.title || !channelInfo?.channelLink) {
       res.status(400).json({ error: "Нужны данные канала (channelInfo). Сначала вызовите /api/channel/analyze" });
       return;
     }
-    const topics = await analyzeChannelTopics(channelInfo);
+    const provider: AiProvider =
+      aiProvider === "deepseek" || aiProvider === "gpt" || aiProvider === "claude" ? aiProvider : "deepseek";
+    const topics = await analyzeChannelTopics(channelInfo, provider);
     res.json(topics);
   } catch (e) {
     const message = e instanceof Error ? e.message : "Ошибка анализа тем";
@@ -36,6 +50,18 @@ creativeRouter.post("/generate", async (req, res) => {
       res.status(400).json({ error: "Нужны данные канала (channelInfo). Сначала вызовите /api/channel/analyze" });
       return;
     }
+    const emojiAmount = (req.body?.emojiAmount as "low" | "medium" | "high") || "medium";
+    const targetGender = Array.isArray(req.body?.targetGender)
+      ? req.body.targetGender.filter((x: unknown) => x === "male" || x === "female")
+      : [];
+    const targetAge = Array.isArray(req.body?.targetAge)
+      ? req.body.targetAge.filter((x: unknown) =>
+          ["children", "teens", "adults", "elderly"].includes(String(x))
+        )
+      : [];
+    const rawProvider = req.body?.aiProvider;
+    const provider: AiProvider =
+      rawProvider === "deepseek" || rawProvider === "gpt" || rawProvider === "claude" ? rawProvider : "deepseek";
     const { text, imagePrompt, sourcePostIndex } = await generateCreative(
       channelInfo,
       Boolean(withImage),
@@ -45,13 +71,18 @@ creativeRouter.post("/generate", async (req, res) => {
       req.body?.goal,
       Array.isArray(req.body?.contactsToInclude)
         ? req.body.contactsToInclude.filter((x: unknown) => typeof x === "string").slice(0, 12)
-        : undefined
+        : undefined,
+      emojiAmount,
+      targetGender,
+      targetAge,
+      provider
     );
     const imageMode = req.body?.imageMode as "none" | "generated" | "from_post" | undefined;
+    const textOnly = Boolean(req.body?.textOnly);
     let imageBase64: string | null = null;
     let imageMediaType: string | null = null;
     let imageError: string | null = null;
-    if (withImage && imagePrompt) {
+    if (withImage && imagePrompt && !textOnly) {
       try {
         imageBase64 = await generateImage(imagePrompt);
         imageMediaType = "image/png";
@@ -69,7 +100,7 @@ creativeRouter.post("/generate", async (req, res) => {
 
 creativeRouter.post("/edit", async (req, res) => {
   try {
-    const { text, instruction } = req.body as { text?: string; instruction?: string };
+    const { text, instruction, aiProvider } = req.body as { text?: string; instruction?: string; aiProvider?: AiProvider };
     if (!text || typeof text !== "string") {
       res.status(400).json({ error: "Укажите text — текущий текст креатива" });
       return;
@@ -78,7 +109,9 @@ creativeRouter.post("/edit", async (req, res) => {
       res.status(400).json({ error: "Укажите instruction — что изменить (можно своими словами)" });
       return;
     }
-    const newText = await editCreativeWithAi(text, instruction);
+    const provider: AiProvider =
+      aiProvider === "deepseek" || aiProvider === "gpt" || aiProvider === "claude" ? aiProvider : "deepseek";
+    const newText = await editCreativeWithAi(text, instruction, provider);
     res.json({ text: newText });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Ошибка редактирования";

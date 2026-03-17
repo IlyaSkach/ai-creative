@@ -54,6 +54,8 @@ export interface ChannelPost {
   text: string;
   photoBase64?: string;
   mediaType?: string;
+  /** Несколько медиа из одного поста (альбом). photoBase64 — первое. */
+  mediaItems?: Array<{ base64: string; mediaType: string }>;
   views?: number;
   reactionsCount?: number;
 }
@@ -194,29 +196,26 @@ async function shutdownTelegramClient(client: { disconnect: () => Promise<void>;
   } catch {}
 }
 
-async function mapMessageToPost(
+type MsgLike = {
+  id?: number;
+  date?: number;
+  message?: string;
+  text?: string;
+  views?: number;
+  grouped_id?: number | string;
+  reactions?: { results?: Array<{ count?: number }> };
+  media?: { className?: string; photo?: unknown; document?: { mimeType?: string; mime_type?: string; size?: number } };
+};
+
+async function downloadOneMedia(
   client: any,
   m: unknown,
   mediaDownloadedRef: { value: number },
-  preferAnyMedia = false
-): Promise<ChannelPost | null> {
-  const msg = m as {
-    id?: number;
-    date?: number;
-    message?: string;
-    text?: string;
-    views?: number;
-    reactions?: { results?: Array<{ count?: number }> };
-    media?: { className?: string; photo?: unknown; document?: { mimeType?: string; mime_type?: string; size?: number } };
-  };
-  const date = msg.date ? new Date(msg.date * 1000) : new Date();
-  const text = (msg.message ?? msg.text ?? "").trim();
-  const views = typeof msg.views === "number" ? msg.views : 0;
-  const reactionsCount = getReactionsCount(msg);
-  let photoBase64: string | undefined;
-  let mediaType: string | undefined;
-  const isPhoto = msg.media && (String(msg.media.className) === "MessageMediaPhoto" || msg.media.photo);
-  const doc = msg.media?.className === "MessageMediaDocument" ? msg.media.document : null;
+  preferAnyMedia: boolean
+): Promise<{ base64: string; mediaType: string } | null> {
+  const msg = m as MsgLike;
+  const isPhoto = msg.media && (String(msg.media!.className) === "MessageMediaPhoto" || (msg.media as any).photo);
+  const doc = msg.media?.className === "MessageMediaDocument" ? (msg.media as any).document : null;
   const mime = doc && (doc.mimeType || doc.mime_type);
   const docSize = doc && typeof doc.size === "number" ? doc.size : undefined;
   const isTooLargeDoc = typeof docSize === "number" && docSize > MAX_MEDIA_BYTES;
@@ -226,29 +225,75 @@ async function mapMessageToPost(
     mediaDownloadedRef.value < MAX_POSTS_WITH_MEDIA &&
     !isTooLargeDoc &&
     (isPhoto || isImageDoc || isVideoDoc || (preferAnyMedia && Boolean(msg.media)));
-  if (hasMedia) {
-    try {
-      const buf = await Promise.race([
-        client.downloadMedia(m as never, {}),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), MEDIA_DOWNLOAD_TIMEOUT_MS)),
-      ]);
-      if (buf && Buffer.isBuffer(buf)) {
-        photoBase64 = buf.toString("base64");
-        mediaType = isPhoto ? "image/jpeg" : (mime || "image/png");
-        mediaDownloadedRef.value += 1;
-      }
-    } catch {
-      // skip
+  if (!hasMedia) return null;
+  try {
+    const buf = await Promise.race([
+      client.downloadMedia(m as never, {}),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), MEDIA_DOWNLOAD_TIMEOUT_MS)),
+    ]);
+    if (buf && Buffer.isBuffer(buf)) {
+      mediaDownloadedRef.value += 1;
+      return {
+        base64: buf.toString("base64"),
+        mediaType: isPhoto ? "image/jpeg" : (mime || "image/png"),
+      };
     }
+  } catch {
+    // skip
   }
+  return null;
+}
+
+async function mapMessageToPost(
+  client: any,
+  m: unknown,
+  mediaDownloadedRef: { value: number },
+  preferAnyMedia = false
+): Promise<ChannelPost | null> {
+  const msg = m as MsgLike;
+  const date = msg.date ? new Date(msg.date * 1000) : new Date();
+  const text = (msg.message ?? msg.text ?? "").trim();
+  const views = typeof msg.views === "number" ? msg.views : 0;
+  const reactionsCount = getReactionsCount(msg);
+  const media = await downloadOneMedia(client, m, mediaDownloadedRef, preferAnyMedia);
   const hasAnyMedia = Boolean(msg.media);
-  if (!(text || photoBase64 || hasAnyMedia)) return null;
+  if (!(text || media || hasAnyMedia)) return null;
   return {
     postId: typeof msg.id === "number" ? msg.id : undefined,
     date: date.toISOString(),
     text: text || "(пост без текста)",
-    photoBase64,
-    mediaType,
+    photoBase64: media?.base64,
+    mediaType: media?.mediaType,
+    views: views || undefined,
+    reactionsCount: reactionsCount || undefined,
+  };
+}
+
+async function mapGroupedMessagesToPost(
+  client: any,
+  messages: unknown[],
+  mediaDownloadedRef: { value: number }
+): Promise<ChannelPost | null> {
+  if (messages.length === 0) return null;
+  const first = messages[0] as MsgLike;
+  const date = first.date ? new Date(first.date * 1000) : new Date();
+  const text = (first.message ?? first.text ?? "").trim();
+  const views = typeof first.views === "number" ? first.views : 0;
+  const reactionsCount = getReactionsCount(first);
+  const mediaItems: Array<{ base64: string; mediaType: string }> = [];
+  for (const m of messages) {
+    const item = await downloadOneMedia(client, m, mediaDownloadedRef, true);
+    if (item) mediaItems.push(item);
+  }
+  if (mediaItems.length === 0 && !text) return null;
+  const firstMedia = mediaItems[0];
+  return {
+    postId: typeof first.id === "number" ? first.id : undefined,
+    date: date.toISOString(),
+    text: text || "(пост без текста)",
+    photoBase64: firstMedia?.base64,
+    mediaType: firstMedia?.mediaType,
+    mediaItems: mediaItems.length > 1 ? mediaItems : undefined,
     views: views || undefined,
     reactionsCount: reactionsCount || undefined,
   };
@@ -279,10 +324,8 @@ async function fetchPostsIfAvailable(username: string): Promise<ChannelPost[]> {
     } catch {}
     await client.connect();
     const entity = await client.getEntity(username.startsWith("@") ? username : `@${username}`);
-    const posts: ChannelPost[] = [];
-    const mediaDownloadedRef = { value: 0 };
+    const allMessages: unknown[] = [];
     let offsetId = 0;
-    let firstBatch: unknown[] = [];
     for (let i = 0; i < 3; i++) {
       const res = await client.invoke(
         new Api.messages.GetHistory({
@@ -293,29 +336,52 @@ async function fetchPostsIfAvailable(username: string): Promise<ChannelPost[]> {
           limit: 100,
           maxId: 0,
           minId: 0,
-          // Тип ожидает BigInteger, но для нас достаточно нулевого hash
           hash: 0 as any,
         })
       );
       const raw = res as { messages?: unknown[] };
       const messages = raw.messages || [];
-      if (i === 0) firstBatch = messages;
       if (i === 0) console.log("[channelParser] GetHistory: получено сообщений в первом ответе:", messages.length);
       if (messages.length === 0) break;
-      for (const m of messages) {
-        if (posts.length >= LAST_POSTS_LIMIT) break;
+      allMessages.push(...messages);
+      const lastMsg = messages[messages.length - 1] as { id?: number };
+      offsetId = lastMsg?.id ?? 0;
+    }
+    const grouped = new Map<string | number, unknown[]>();
+    const singles: unknown[] = [];
+    for (const m of allMessages) {
+      const gid = (m as MsgLike).grouped_id;
+      if (gid != null && gid !== "") {
+        const key = String(gid);
+        if (!grouped.has(key)) grouped.set(key, []);
+        grouped.get(key)!.push(m);
+      } else {
+        singles.push(m);
+      }
+    }
+    const posts: ChannelPost[] = [];
+    const mediaDownloadedRef = { value: 0 };
+    const seenGroupIds = new Set<string>();
+    for (const m of allMessages) {
+      if (posts.length >= LAST_POSTS_LIMIT) break;
+      const gid = (m as MsgLike).grouped_id;
+      if (gid != null && gid !== "") {
+        const key = String(gid);
+        if (seenGroupIds.has(key)) continue;
+        seenGroupIds.add(key);
+        const group = grouped.get(key) || [m];
+        const post = await mapGroupedMessagesToPost(client, group, mediaDownloadedRef);
+        if (post) posts.push(post);
+      } else {
         const post = await mapMessageToPost(client, m, mediaDownloadedRef);
         if (post) posts.push(post);
       }
-      if (posts.length >= LAST_POSTS_LIMIT) break;
-      const lastMsg = messages[messages.length - 1] as { id?: number };
-      offsetId = lastMsg?.id ?? 0;
     }
     await shutdownTelegramClient(client);
     const out = posts.slice(0, LAST_POSTS_LIMIT);
     console.log("[channelParser] Последних постов загружено:", out.length);
-    if (firstBatch.length > 0 && out.length === 0) {
-      const first = firstBatch[0] as Record<string, unknown>;
+    if (allMessages.length > 0 && out.length === 0) {
+      const first = allMessages[0] as Record<string, unknown>;
       console.log("[channelParser] Пример ключей первого сообщения:", Object.keys(first));
     }
     return out;
@@ -350,6 +416,7 @@ async function fetchSpecificPostIfAvailable(username: string, postId: number): P
     await client.connect();
     const entity = await client.getEntity(username.startsWith("@") ? username : `@${username}`);
     let target: unknown | null = null;
+    let batchWithTarget: unknown[] = [];
     let offsetId = postId + 1;
     for (let i = 0; i < 6; i++) {
       const res = await client.invoke(
@@ -369,6 +436,7 @@ async function fetchSpecificPostIfAvailable(username: string, postId: number): P
       const found = messages.find((m) => (m as { id?: number }).id === postId);
       if (found) {
         target = found;
+        batchWithTarget = messages;
         break;
       }
       offsetId = ((messages[messages.length - 1] as { id?: number }).id || 0);
@@ -379,8 +447,15 @@ async function fetchSpecificPostIfAvailable(username: string, postId: number): P
       console.log(`[channelParser] Пост ${postId} не найден в истории @${username}, используем обычный режим постов.`);
       return fetchPostsIfAvailable(username);
     }
-    let mediaDownloaded = { value: 0 };
-    const post = await mapMessageToPost(client, target, mediaDownloaded, true);
+    const mediaDownloaded = { value: 0 };
+    const gid = (target as MsgLike).grouped_id;
+    let post: ChannelPost | null;
+    if (gid != null && gid !== "") {
+      const group = batchWithTarget.filter((m) => String((m as MsgLike).grouped_id) === String(gid));
+      post = await mapGroupedMessagesToPost(client, group, mediaDownloaded);
+    } else {
+      post = await mapMessageToPost(client, target, mediaDownloaded, true);
+    }
     await shutdownTelegramClient(client);
     return post ? [post] : [];
   } catch (e) {

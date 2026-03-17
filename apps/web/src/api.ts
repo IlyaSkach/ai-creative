@@ -1,4 +1,13 @@
 const API = "/api";
+
+export type AiProvider = "deepseek" | "gpt" | "claude";
+
+export async function fetchCreativeProviders(): Promise<AiProvider[]> {
+  const res = await fetch(`${API}/creative/providers`);
+  const data = await parseApiResponse<{ providers: AiProvider[] }>(res, "Ошибка загрузки провайдеров");
+  return data.providers || [];
+}
+
 export type CreativeStyle =
   | "native"
   | "direct"
@@ -9,13 +18,25 @@ export type CreativeStyle =
   | "humor"
   | "mini_landing";
 export type CreativeGoal = "subscribers" | "sales" | "brand";
+export type EmojiAmount = "low" | "medium" | "high";
+export type TargetGender = "male" | "female";
+export type TargetAge = "children" | "teens" | "adults" | "elderly";
 
 export interface ChannelInfo {
   title: string;
   description: string;
   username: string;
   channelLink: string;
-  posts: Array<{ postId?: number; date: string; text: string; photoBase64?: string; mediaType?: string; views?: number; reactionsCount?: number }>;
+  posts: Array<{
+    postId?: number;
+    date: string;
+    text: string;
+    photoBase64?: string;
+    mediaType?: string;
+    mediaItems?: Array<{ base64: string; mediaType: string }>;
+    views?: number;
+    reactionsCount?: number;
+  }>;
   directPostMode?: boolean;
   sourcePostLink?: string;
   landingContacts?: {
@@ -38,6 +59,7 @@ function stripHeavyMedia(channelInfo: ChannelInfo): ChannelInfo {
     posts: (channelInfo.posts || []).map((p) => ({
       ...p,
       photoBase64: undefined,
+      mediaItems: undefined,
     })),
   };
 }
@@ -89,7 +111,12 @@ export async function generateCreative(
   imageMode?: "none" | "generated" | "from_post",
   style: CreativeStyle = "native",
   goal: CreativeGoal = "subscribers",
-  contactsToInclude?: string[]
+  contactsToInclude?: string[],
+  emojiAmount: EmojiAmount = "medium",
+  targetGender: TargetGender[] = [],
+  targetAge: TargetAge[] = [],
+  textOnly = false,
+  aiProvider: AiProvider = "deepseek"
 ): Promise<{ text: string; imageBase64: string | null; imageMediaType?: string | null; imagePrompt: string | null; imageError?: string | null; sourcePostIndex?: number | null }> {
   const lightChannelInfo = stripHeavyMedia(channelInfo);
   const res = await fetch(`${API}/creative/generate`, {
@@ -104,6 +131,11 @@ export async function generateCreative(
       style,
       goal,
       contactsToInclude: contactsToInclude && contactsToInclude.length > 0 ? contactsToInclude : undefined,
+      emojiAmount,
+      targetGender: targetGender.length > 0 ? targetGender : undefined,
+      targetAge: targetAge.length > 0 ? targetAge : undefined,
+      textOnly: textOnly || undefined,
+      aiProvider,
     }),
   });
   return parseApiResponse<{ text: string; imageBase64: string | null; imageMediaType?: string | null; imagePrompt: string | null; imageError?: string | null; sourcePostIndex?: number | null }>(
@@ -112,24 +144,25 @@ export async function generateCreative(
   );
 }
 
-export async function analyzeChannelTopics(channelInfo: ChannelInfo): Promise<ChannelTopics> {
+export async function analyzeChannelTopics(channelInfo: ChannelInfo, aiProvider: AiProvider = "deepseek"): Promise<ChannelTopics> {
   const lightChannelInfo = stripHeavyMedia(channelInfo);
   const res = await fetch(`${API}/creative/themes`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ channelInfo: lightChannelInfo }),
+    body: JSON.stringify({ channelInfo: lightChannelInfo, aiProvider }),
   });
   return parseApiResponse<ChannelTopics>(res, "Ошибка анализа тем");
 }
 
 export async function editCreativeWithAi(
   text: string,
-  instruction: string
+  instruction: string,
+  aiProvider: AiProvider = "deepseek"
 ): Promise<string> {
   const res = await fetch(`${API}/creative/edit`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, instruction }),
+    body: JSON.stringify({ text, instruction, aiProvider }),
   });
   const data = await parseApiResponse<{ text: string }>(res, "Ошибка редактирования");
   return data.text;
@@ -160,7 +193,8 @@ export async function sendToTelegram(
   to: string,
   text: string,
   imageBase64?: string | null,
-  imageMediaType?: string | null
+  imageMediaType?: string | null,
+  mediaItems?: Array<{ base64: string; mediaType: string }>
 ): Promise<void> {
   const res = await fetch(`${API}/telegram/send`, {
     method: "POST",
@@ -170,6 +204,7 @@ export async function sendToTelegram(
       text,
       imageBase64: imageBase64 || undefined,
       imageMediaType: imageMediaType || undefined,
+      mediaItems: mediaItems && mediaItems.length > 0 ? mediaItems : undefined,
     }),
   });
   await parseApiResponse<{ ok: boolean }>(res, "Ошибка отправки");

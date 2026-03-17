@@ -154,3 +154,13 @@ button.danger {
 
 .mt1 { margin-top: 1rem; }
 .mb1 { margin-bottom: 1rem; }
+
+.rich-text-content:empty::before,
+.rich-text-content[data-placeholder]:empty::before {
+  content: attr(data-placeholder);
+  color: var(--muted);
+}
+.rich-text-content:focus {
+  outline: none;
+  border-color: var(--accent);
+}

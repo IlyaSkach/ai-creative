@@ -5,7 +5,7 @@
 ## Что нужно (у вас уже есть)
 
 - **Токен Telegram-бота** — от [@BotFather](https://t.me/BotFather)
-- **API DeepSeek** — для генерации и редактирования текста
+- **API для текста** — DeepSeek, Bothub или OpenAI (выбор в начале)
 - **API BotHub** — для генерации картинки (DALL-E)
 
 ## Что ещё нужно для полного функционала
@@ -27,6 +27,7 @@
 npm install
 cp .env.example .env
 # отредактировать .env: TELEGRAM_BOT_TOKEN, DEEPSEEK_API_KEY, BOTHUB_API_KEY
+# Опционально: OPENAI_API_KEY — для выбора GPT вместо DeepSeek
 
 # разработка (API + фронт одновременно)
 npm run dev

@@ -40,6 +40,16 @@ app.use("/api/telegram", telegramRouter);
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
+// В production: раздача статики фронтенда (после сборки npm run build)
+const webDist = path.resolve(__dirname, "../../web/dist");
+if (fs.existsSync(webDist)) {
+  app.use(express.static(webDist));
+  app.get("*", (req, res, next) => {
+    if (req.path.startsWith("/api")) return next();
+    res.sendFile(path.join(webDist, "index.html"));
+  });
+}
+
 app.listen(port, () => {
   console.log(`API: http://localhost:${port}`);
 });

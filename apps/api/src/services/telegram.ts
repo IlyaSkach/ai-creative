@@ -175,3 +175,87 @@ export async function sendAnimation(
 ): Promise<void> {
   await sendMediaMultipart("sendAnimation", "animation", chatId, caption, animationBase64, mediaType);
 }
+
+/** Отправка нескольких медиа (фото/гиф) одной группой. caption только у первого. */
+export async function sendMediaGroup(
+  chatId: string,
+  caption: string,
+  items: Array<{ base64: string; mediaType: string }>
+): Promise<void> {
+  if (items.length === 0) {
+    await sendMessage(chatId, caption);
+    return;
+  }
+  if (items.length === 1) {
+    const m = items[0];
+    const isAnimated = m.mediaType.includes("gif") || m.mediaType.startsWith("video/");
+    if (isAnimated) {
+      await sendAnimation(chatId, caption, m.base64, m.mediaType);
+    } else {
+      await sendPhoto(chatId, caption, m.base64, m.mediaType);
+    }
+    return;
+  }
+  const token = getBotToken();
+  if (!token) throw new Error("TELEGRAM_BOT_TOKEN не задан");
+  const sendMediaTimeoutMs = getSendMediaTimeoutMs();
+  const media: Array<{ type: "photo" | "video"; media: string }> = [];
+  const parts: Array<{ name: string; buffer: Buffer; contentType: string; filename: string }> = [];
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const ext = item.mediaType.includes("gif") ? "gif" : item.mediaType.includes("webp") ? "webp" : "jpg";
+    const filename = `media${i}.${ext}`;
+    media.push({ type: "photo", media: `attach://${filename}` });
+    parts.push({
+      name: filename,
+      buffer: Buffer.from(item.base64, "base64"),
+      contentType: item.mediaType,
+      filename,
+    });
+  }
+  const boundary = `----FormBoundary${Date.now()}${Math.random().toString(36).slice(2)}`;
+  const crlf = "\r\n";
+  const bodyParts: Buffer[] = [];
+  bodyParts.push(Buffer.from(`--${boundary}${crlf}Content-Disposition: form-data; name="chat_id"${crlf}${crlf}${chatId}${crlf}`, "utf8"));
+  bodyParts.push(Buffer.from(`--${boundary}${crlf}Content-Disposition: form-data; name="media"${crlf}${crlf}${JSON.stringify(media)}${crlf}`, "utf8"));
+  bodyParts.push(Buffer.from(`--${boundary}${crlf}Content-Disposition: form-data; name="caption"${crlf}${crlf}${caption}${crlf}`, "utf8"));
+  bodyParts.push(Buffer.from(`--${boundary}${crlf}Content-Disposition: form-data; name="parse_mode"${crlf}${crlf}HTML${crlf}`, "utf8"));
+  for (const p of parts) {
+    bodyParts.push(Buffer.from(`--${boundary}${crlf}Content-Disposition: form-data; name="${p.name}"; filename="${p.filename}"${crlf}Content-Type: ${p.contentType}${crlf}${crlf}`, "utf8"));
+    bodyParts.push(p.buffer);
+    bodyParts.push(Buffer.from(crlf, "utf8"));
+  }
+  bodyParts.push(Buffer.from(`--${boundary}--${crlf}`, "utf8"));
+  const body = Buffer.concat(bodyParts);
+  const url = `${BASE}${token}/sendMediaGroup`;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), sendMediaTimeoutMs);
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      body,
+      headers: {
+        "Content-Type": `multipart/form-data; boundary=${boundary}`,
+        "Content-Length": String(body.length),
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    const raw = await res.text();
+    let data: { ok?: boolean; description?: string };
+    try {
+      data = JSON.parse(raw) as { ok?: boolean; description?: string };
+    } catch {
+      throw new Error(`Telegram API: ${res.status} ${raw.slice(0, 200)}`);
+    }
+    if (!data.ok) throw new Error(data.description || `Telegram API error: ${res.status}`);
+  } catch (e) {
+    clearTimeout(timeoutId);
+    if (e instanceof Error && e.name === "AbortError") {
+      throw new Error(
+        `Таймаут отправки медиа (${Math.round(sendMediaTimeoutMs / 1000)} сек). Попробуйте позже.`
+      );
+    }
+    throw e;
+  }
+}

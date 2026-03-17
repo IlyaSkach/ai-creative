@@ -1,13 +1,8 @@
 /**
- * Генерация и редактирование текста креатива через DeepSeek API.
+ * Генерация и редактирование текста креатива через AI (DeepSeek, Bothub, OpenAI).
  */
 
-function getConfig() {
-  return {
-    base: process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com",
-    apiKey: process.env.DEEPSEEK_API_KEY?.trim() || "",
-  };
-}
+import { type AiProvider, chatCompletion } from "./ai-providers.js";
 
 function sanitizeForModel(input: string): string {
   const normalized = input
@@ -34,7 +29,16 @@ export interface ChannelInfo {
   description: string;
   username: string;
   channelLink: string;
-  posts: Array<{ postId?: number; date: string; text: string; photoBase64?: string; mediaType?: string; views?: number; reactionsCount?: number }>;
+  posts: Array<{
+    postId?: number;
+    date: string;
+    text: string;
+    photoBase64?: string;
+    mediaType?: string;
+    mediaItems?: Array<{ base64: string; mediaType: string }>;
+    views?: number;
+    reactionsCount?: number;
+  }>;
   landingContacts?: {
     phones?: string[];
     emails?: string[];
@@ -59,6 +63,9 @@ export type CreativeStyle =
   | "humor"
   | "mini_landing";
 export type CreativeGoal = "subscribers" | "sales" | "brand";
+export type EmojiAmount = "low" | "medium" | "high";
+export type TargetGender = "male" | "female";
+export type TargetAge = "children" | "teens" | "adults" | "elderly";
 
 /** Охват поста: просмотры + реакции (реакции учитываем с весом). */
 function engagementScore(p: { views?: number; reactionsCount?: number }): number {
@@ -101,18 +108,14 @@ function buildPostIndexContext(info: ChannelInfo): string {
   return trimForModel(lines.join("\n"), 4200);
 }
 
-function extractModelText(data: { choices?: Array<{ message?: { content?: string } }> }): string {
-  return data.choices?.[0]?.message?.content?.trim() || "";
-}
-
 function cleanJsonString(content: string): string {
   return content.replace(/^```json?\s*/i, "").replace(/\s*```$/, "").trim();
 }
 
-export async function analyzeChannelTopics(channelInfo: ChannelInfo): Promise<TopicsAnalysis> {
-  const { base: DEEPSEEK_BASE, apiKey: API_KEY } = getConfig();
-  if (!API_KEY) throw new Error("DEEPSEEK_API_KEY не задан");
-
+export async function analyzeChannelTopics(
+  channelInfo: ChannelInfo,
+  aiProvider: AiProvider = "deepseek"
+): Promise<TopicsAnalysis> {
   const posts = channelInfo.posts
     .slice()
     .sort((a, b) => engagementScore(b) - engagementScore(a))
@@ -151,28 +154,10 @@ ${posts.map((p) => `- ${p}`).join("\n")}
 - best_themes_insight: 1-2 коротких предложения, с упоминанием самых сильных тем
 - без markdown, только JSON`);
 
-  const res = await fetch(`${DEEPSEEK_BASE}/v1/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: "deepseek-chat",
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-      temperature: 0.3,
-    }),
-  });
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`DeepSeek API error: ${res.status} ${err}`);
-  }
-
-  const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
-  const content = extractModelText(data);
+  const content = await chatCompletion(aiProvider, [
+    { role: "system", content: system },
+    { role: "user", content: user },
+  ], { temperature: 0.3 });
   const cleaned = cleanJsonString(content);
   try {
     const parsed = JSON.parse(cleaned) as { summary?: string; topics?: unknown; best_themes_insight?: string };
@@ -200,10 +185,12 @@ export async function generateCreative(
   forcedSourcePostIndex?: number,
   style: CreativeStyle = "native",
   goal: CreativeGoal = "subscribers",
-  contactsToInclude?: string[]
+  contactsToInclude?: string[],
+  emojiAmount: EmojiAmount = "medium",
+  targetGender: TargetGender[] = [],
+  targetAge: TargetAge[] = [],
+  aiProvider: AiProvider = "deepseek"
 ): Promise<{ text: string; imagePrompt: string | null; sourcePostIndex: number | null }> {
-  const { base: DEEPSEEK_BASE, apiKey: API_KEY } = getConfig();
-  if (!API_KEY) throw new Error("DEEPSEEK_API_KEY не задан");
   const context = buildContext(channelInfo, selectedTopic);
   const indexedPostsContext = buildPostIndexContext(channelInfo);
   const styleRules: Record<CreativeStyle, string> = {
@@ -270,6 +257,32 @@ export async function generateCreative(
       "Цель креатива: БРЕНД / PR. Главный акцент — повысить узнаваемость, доверие и интерес к бренду/продукту, не давить жесткой продажей.",
   };
 
+  const emojiRules: Record<EmojiAmount, string> = {
+    low: "Эмодзи: МИНИМУМ. Используй 0–2 эмодзи на весь креатив, только если уместно.",
+    medium: "Эмодзи: УМЕРЕННО. Используй 3–6 эмодзи, расставь по тексту для акцентов.",
+    high: "Эмодзи: МНОГО. Используй 7–12 эмодзи, делай текст живым и выразительным.",
+  };
+
+  const genderRule =
+    targetGender.length === 0
+      ? "Аудитория: широкая (мужчины и женщины)."
+      : targetGender.length === 2
+        ? "Аудитория: широкая (мужчины и женщины)."
+        : targetGender[0] === "male"
+          ? "Аудитория: МУЖСКАЯ. Пиши так, чтобы креатив резонировал с мужской аудиторией: формулировки, примеры, выгоды."
+          : "Аудитория: ЖЕНСКАЯ. Пиши так, чтобы креатив резонировал с женской аудиторией: формулировки, примеры, выгоды.";
+
+  const ageLabels: Record<TargetAge, string> = {
+    children: "дети",
+    teens: "подростки",
+    adults: "взрослые",
+    elderly: "пожилые",
+  };
+  const ageRule =
+    targetAge.length === 0
+      ? "Возраст аудитории: любой."
+      : `Возраст аудитории: ${targetAge.map((a) => ageLabels[a]).join(", ")}. Адаптируй тон, примеры и подачу под эту возрастную группу.`;
+
   const system = sanitizeForModel(`Ты профессиональный копирайтер рекламных постов для Telegram.
 Твоя задача: создать рекламный пост-креатив по тематике канала.
 Креатив должен быть эксклюзивным: опирайся на конкретные посты и темы канала (например, если есть пост про "SEO в 2026" — упомяни это в креативе: "Всё про SEO в 2026 и не только — подписывайтесь").
@@ -277,7 +290,6 @@ export async function generateCreative(
 - Пост должен быть адаптирован под Telegram.
 - Короткие абзацы.
 - Читается быстро.
-- Используй эмодзи умеренно.
 - Сильный первый абзац (hook).
 - Не пиши как классическую баннерную рекламу.
 - Длина 600–1200 символов.
@@ -287,6 +299,9 @@ export async function generateCreative(
 ${styleRules[style]}
 ${styleContrastRule}
 ${goalRules[goal]}
+${emojiRules[emojiAmount]}
+${genderRule}
+${ageRule}
 Без markdown.`);
   const focusedPost =
     forcedSourcePostIndex && forcedSourcePostIndex >= 1 && forcedSourcePostIndex <= channelInfo.posts.length
@@ -327,27 +342,10 @@ ${contactsBlock}
 
 ${withImage ? "Нужна картинка — заполни image_prompt на английском." : "Картинка не нужна — в image_prompt укажи null."}`);
 
-  const res = await fetch(`${DEEPSEEK_BASE}/v1/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: "deepseek-chat",
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-      temperature: 0.7,
-    }),
-  });
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`DeepSeek API error: ${res.status} ${err}`);
-  }
-  const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
-  const content = extractModelText(data);
+  const content = await chatCompletion(aiProvider, [
+    { role: "system", content: system },
+    { role: "user", content: user },
+  ], { temperature: 0.7 });
   const cleaned = cleanJsonString(content);
   let text = content;
   let imagePrompt: string | null = null;
@@ -374,37 +372,19 @@ ${withImage ? "Нужна картинка — заполни image_prompt на 
 
 export async function editCreativeWithAi(
   currentText: string,
-  userInstruction: string
+  userInstruction: string,
+  aiProvider: AiProvider = "deepseek"
 ): Promise<string> {
-  const { base: DEEPSEEK_BASE, apiKey: API_KEY } = getConfig();
-  if (!API_KEY) throw new Error("DEEPSEEK_API_KEY не задан");
-  const res = await fetch(`${DEEPSEEK_BASE}/v1/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${API_KEY}`,
+  const content = await chatCompletion(aiProvider, [
+    {
+      role: "system",
+      content:
+        "Ты помогаешь редактировать рекламный текст. Возвращай только итоговый текст креатива, без пояснений и markdown.",
     },
-    body: JSON.stringify({
-      model: "deepseek-chat",
-      messages: [
-        {
-          role: "system",
-          content:
-            "Ты помогаешь редактировать рекламный текст. Возвращай только итоговый текст креатива, без пояснений и markdown.",
-        },
-        {
-          role: "user",
-          content: sanitizeForModel(`Текущий текст креатива:\n${currentText}\n\nПользователь просит: ${userInstruction}\n\nВерни только обновлённый текст креатива.`),
-        },
-      ],
-      temperature: 0.5,
-    }),
-  });
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`DeepSeek API error: ${res.status} ${err}`);
-  }
-  const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
-  const content = data.choices?.[0]?.message?.content?.trim() || "";
+    {
+      role: "user",
+      content: sanitizeForModel(`Текущий текст креатива:\n${currentText}\n\nПользователь просит: ${userInstruction}\n\nВерни только обновлённый текст креатива.`),
+    },
+  ], { temperature: 0.5 });
   return content.replace(/^["']|["']$/g, "").trim() || currentText;
 }
