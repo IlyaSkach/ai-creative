@@ -6,7 +6,7 @@ const IMAGE_TIMEOUT_MS = 45000;
 const IMAGE_GENERATION_TIMEOUT_MS = 90000;
 const IMAGE_GENERATION_RETRIES = 1;
 const LOG_PREVIEW = 1800;
-const DEFAULT_IMAGE_MODELS = ["gemini-3-pro-image-preview", "gpt-5-image", "gpt-image-1", "dall-e-3"];
+const DEFAULT_IMAGE_MODELS = ["flux-1.1-pro-ultra", "gpt-image-1", "dall-e-3", "stable-diffusion"];
 
 function getApiKey(): string {
   return process.env.BOTHUB_API_KEY?.trim() || "";
@@ -20,6 +20,10 @@ function getImageModels(): string[] {
     .filter(Boolean);
   const unique = [...new Set(parsed)];
   return unique.length > 0 ? unique : DEFAULT_IMAGE_MODELS;
+}
+
+function useResponsesFallback(): boolean {
+  return process.env.BOTHUB_USE_RESPONSES_FALLBACK === "1";
 }
 
 function preview(text: string, max = LOG_PREVIEW): string {
@@ -298,11 +302,13 @@ export async function generateImage(prompt: string): Promise<string> {
     }
   }
 
-  for (const model of models) {
-    try {
-      return await generateViaResponsesEndpoint(apiKey, model, prompt);
-    } catch (e) {
-      lastError = e instanceof Error ? e : new Error(String(e));
+  if (useResponsesFallback()) {
+    for (const model of models) {
+      try {
+        return await generateViaResponsesEndpoint(apiKey, model, prompt);
+      } catch (e) {
+        lastError = e instanceof Error ? e : new Error(String(e));
+      }
     }
   }
 
